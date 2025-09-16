@@ -40,30 +40,29 @@ class SOCP4LDR:
 
     def set_matrix(self):
         # --- Build matrices C, D, d, h ---
-        C = np.zeros((3 * self.I1 + 1, self.I1))
-        D = np.zeros((3 * self.I1 + 1, self.I1))
+        C = np.zeros((2 * self.I1 + 2, self.I1))
+        D = np.zeros((2 * self.I1 + 2, self.I1))
 
         for i in range(self.I1):
-            C[2*i, i] = 2.0         # row 2*i (0-indexed) = 2e_i^T
-            D[2*i+1, i] = 1.0       # row 2*i+1 = e_i^T
+            C[2*i, i] = 2.0           # row 2*i (0-indexed) = 2e_i^T
+            D[2*i+1, i] = 1.0      # row 2*i+1 = e_i^T
 
-        C[3*self.I1, :] = 2.0            # last row of C: 2*1^T
+        C[2*self.I1, :] = 2.0      # last row of C: 2*1^T
 
-        d = np.zeros(3 * self.I1 + 1)
-        d[-1] = 1.0                 # d = [0,...,1]^T
+        d = np.zeros(2 * self.I1 + 2)
+        d[-1] = 1.0                     # d = [0,...,1]^T
 
-        h = np.zeros(3 * self.I1 + 1)
+        h = np.zeros(2 * self.I1 + 2)
         for i in range(self.I1):
             h[2*i] = 2 * self.mu[i]      # odd rows: 2*mu_i
-            h[2*i+1] = 1.0          # even rows: 1
-        for i in range(self.I1):
-            h[2*self.I1 + i] = 2 * self.mu[i]      # odd rows: 2*mu_i
-        h[3*self.I1] = 1.0               # last: 1
+            h[2*i+1] = 1.0                  # even rows: 1
 
-        E = - np.eye(3 * self.I1 + 1)
+        h[2*self.I1] = 2 * sum(self.mu[i] for i in range(self.I1))      # odd rows: 2*mu_i
+        h[2*self.I1 + 1] = 1.0           # last: 1
+
+        E = - np.eye(2 * self.I1 + 2)
 
         self.C, self.D, self.d, self.h, self.E = C, D, d, h, E
-
 
 
     def build_model(self):
@@ -77,7 +76,7 @@ class SOCP4LDR:
             self.set_objective()
         except Exception as e:
             print(f"Error building model: {e}")
-
+        self.model.update()
         print("🔍 Model validation:")
         print(f"  Number of constraints: {self.model.numConstrs}")
         print(f"  Number of variables: {self.model.numVars}")
@@ -103,7 +102,7 @@ class SOCP4LDR:
             for t_val in self.t_list:
                 for p_val in self.p_list:
                     self.G0[(phi, t_val, p_val)] = self.model.addVar(
-                        lb=0.0, ub=GRB.INFINITY, name=f"G0_{phi}_{t_val}_{p_val}"
+                        lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"G0_{phi}_{t_val}_{p_val}"
                     )
 
         # G^{(z)}: linear coeff for z_i
@@ -131,7 +130,7 @@ class SOCP4LDR:
         for phi in self.phi_list:
             for t_val in self.t_list:
                 self.R0[(phi, t_val)] = self.model.addVar(
-                    lb=0.0, ub=GRB.INFINITY, name=f"R0_{phi}_{t_val}"
+                    lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"R0_{phi}_{t_val}"
                 )
 
         # R^{(z)}: linear coeff for z_i in R
@@ -155,7 +154,7 @@ class SOCP4LDR:
         # pi_q for each q in Q
         self.pi = {}
         for q_idx, q in enumerate(self.Q_list):
-            self.pi[q] = self.model.addVars(3 * self.I1 + 1, lb=-GRB.INFINITY, name=f"pi_{q_idx}")
+            self.pi[q] = self.model.addVars(2 * self.I1 + 2, lb=-GRB.INFINITY, name=f"pi_{q_idx}")
 
         # auxiliary variables
         self.delta0 = {}
@@ -181,20 +180,20 @@ class SOCP4LDR:
         self.alpha = {"0": self.alpha0, "z": self.alpha_z, "u": self.alpha_u}
         for q in self.Q_list:
             self.alpha0[q] = self.model.addVar(
-                        lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"alpha0_{q}"
+                        lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"alpha0_{q}".replace(" ", "_")
                     )
             for i in range(self.I1):
                 self.alpha_z[(q, i)] = self.model.addVar(
-                            lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"alpha_z_{q}_{i}"
+                            lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"alpha_z_{q}_{i}".replace(" ", "_")
                         )
             for k in range(self.I1):
                 self.alpha_u[(q, k)] = self.model.addVar(
-                            lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"alpha_u_{q}_{k}"
+                            lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"alpha_u_{q}_{k}".replace(" ", "_")
                         )
         self.gamma = {}
         for q in self.Q_list:
             self.gamma[q] = self.model.addVar(
-                        lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"gamma_{q}"
+                        lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"gamma_{q}".replace(" ", "_")
                     )
 
 
@@ -265,13 +264,13 @@ class SOCP4LDR:
                 t_val = self.t_list[t]
                 if t_val <= self.t_d_phi.get(phi, 0):
                     # \Delta^0_{\phi t} = 0, \quad 1 \forall \phi \in \Phi, \leq t \leq t_\phi(d) \\
-                    self.model.addConstr(self.delta0[(phi, t_val)] == 0.0, name=f"delta0_{phi}_{t_val}")
+                    self.model.addConstr(self.delta0[(phi, t_val)] == 0.0, name=f"delta00_{phi}_{t_val}")
                     # \Delta^{(z)}_{\phi t, i} = 0 \quad \forall \phi \in \Phi, \forall i, 1 \leq t \leq t_\phi(d) \\
                     for i in range(self.I1):
-                        self.model.addConstr(self.delta_z[(phi, t_val, i)] == 0.0, name=f"deltaz_{phi}_{t_val}_{i}")
+                        self.model.addConstr(self.delta_z[(phi, t_val, i)] == 0.0, name=f"deltaz0_{phi}_{t_val}_{i}")
                     # \Delta^{(u)}_{\phi t, k} = 0 \quad \forall \phi \in \Phi, \forall k=1,\dots,I_, 1 \leq t \leq t_\phi(d) \\
                     for k in range(self.I1):
-                        self.model.addConstr(self.delta_u[(phi, t_val, k)] == 0.0, name=f"deltau_{phi}_{t_val}_{k}")
+                        self.model.addConstr(self.delta_u[(phi, t_val, k)] == 0.0, name=f"deltau0_{phi}_{t_val}_{k}")
                 else:
                     # R^0_{\phi t} = 0 \quad \forall \phi \in \Phi, t \geq t_\phi(d)+1 \\
                     self.model.addConstr(self.R0[(phi, t_val)] == 0.0, name=f"R0_{phi}_{t_val}")
@@ -316,10 +315,10 @@ class SOCP4LDR:
                             for p_val in self.p_list:
                                 expr -= self.c_phi_tp.get((phi, t_val, p_val), 0.0) * self.Gu[(phi, t_val, p_val, k)]
                     alpha_u_obj[k] = expr
-                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_obj[k], name=f"alpha_u_{q}_{k}")
+                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_obj[k], name=f"alpha_u_obj_{q}_{k}")
 
                 # gamma_q = self.l  # for objective
-                self.model.addConstr(self.gamma[q] == self.l, name=f"gamma_{q}")
+                self.model.addConstr(self.gamma[q] == self.l, name=f"gamma_obj_{q}")
                             
                 # self.alpha_z[q] = alpha_z_obj
                 # self.alpha_u[q] = alpha_u_obj
@@ -331,37 +330,37 @@ class SOCP4LDR:
 
                 # alpha0_svc = d^0_{\phi t} - a \sum_p p G^0_{\phi t p} - R^0_{\phi t} + a \hat{p}_\phi 
                 alpha0_svc = 0
-                expr = d_0_phi_t.get((phi, t_val), 0.0)
+                expr = self.d_0_phi_t.get((phi, t_val), 0.0)
                 for p_val in self.p_list:
-                    expr -= a * p_val * self.G0[(phi, t_val, p_val)]
+                    expr -= self.a * p_val * self.G0[(phi, t_val, p_val)]
                 expr -= self.R0[(phi, t_val)]
-                expr += a * self.p_hat[phi]
+                expr += self.a * self.p_hat[phi]
                 alpha0_svc= expr
-                self.model.addConstr(self.alpha0[q] == alpha0_svc, name=f"alpha0_{q}")
+                self.model.addConstr(self.alpha0[q] == alpha0_svc, name=f"alpha0_svc_{phi}_{t_val}")
 
 
                 # alpha^{svc,phi,t,(z)}_i = d^{(z)}_{phi t, i} - a * sum_p p * G^{(z)}_{phi t p, i} - R^{(z)}_{phi t, i}
                 alpha_z_svc = [gp.LinExpr() for _ in range(self.I1)]
                 for i in range(self.I1):
-                    expr = d_z_phi_t_i.get((phi, t_val, i), 0.0)
+                    expr = self.d_z_phi_t_i.get((phi, t_val, i), 0.0)
                     for p_val in self.p_list:
-                        expr -= a * p_val * self.Gz[(phi, t_val, p_val, i)]
+                        expr -= self.a * p_val * self.Gz[(phi, t_val, p_val, i)]
                     expr -= self.Rz[(phi, t_val, i)]
                     alpha_z_svc[i] = expr
-                    self.model.addConstr(self.alpha_z[q, i] == alpha_z_svc[i], name=f"alpha_z_{q}_{i}")
+                    self.model.addConstr(self.alpha_z[q, i] == alpha_z_svc[i], name=f"alpha_z_svc_{phi}_{t_val}_{i}")
 
                 # alpha^{svc,phi,t,(u)}_k = -a * sum_p p * G^{(u)}_{phi t p, k} - R^{(u)}_{phi t, k}
                 alpha_u_svc = [gp.LinExpr() for _ in range(self.I1)]
                 for k in range(self.I1):
                     expr = 0.0
                     for p_val in self.p_list:
-                        expr -= a * p_val * self.Gu[(phi, t_val, p_val, k)]
+                        expr -= self.a * p_val * self.Gu[(phi, t_val, p_val, k)]
                     expr -= self.Ru[(phi, t_val, k)]
                     alpha_u_svc[k] = expr
-                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_svc[k], name=f"alpha_u_{q}_{k}")
+                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_svc[k], name=f"alpha_u_svc_{phi}_{t_val}_{k}")
 
                 # gamma_q = 0.0
-                self.model.addConstr(self.gamma[q] == 0.0, name=f"gamma_{q}")
+                self.model.addConstr(self.gamma[q] == 0.0, name=f"gamma_svc_{phi}_{t_val}")
 
                 # self.alpha_z[q]=alpha_z_svc
                 # self.alpha_u[q] = alpha_u_svc
@@ -376,7 +375,7 @@ class SOCP4LDR:
                 for p_val in self.p_list:
                     alpha0_mix += self.G0[(phi, t_val, p_val)]
                 alpha0_mix -= 1
-                self.model.addConstr(self.alpha0[q] == alpha0_mix, name=f"alpha0_{q}")
+                self.model.addConstr(self.alpha0[q] == alpha0_mix, name=f"alpha0_mix_{phi}_{t_val}")
 
 
                 # alpha^{mix,phi,t,(z)}_i = sum_p G^{(z)}_{phi t p, i}
@@ -386,7 +385,7 @@ class SOCP4LDR:
                     for p_val in self.p_list:
                         expr += self.Gz[(phi, t_val, p_val, i)]
                     alpha_z_mix[i] = expr
-                    self.model.addConstr(self.alpha_z[q, i] == alpha_z_mix[i], name=f"alpha_z_{q}_{i}")
+                    self.model.addConstr(self.alpha_z[q, i] == alpha_z_mix[i], name=f"alpha_z_mix_{phi}_{t_val}_{i}")
 
                 # alpha^{mix,phi,t,(u)}_k = sum_p G^{(u)}_{phi t p, k}
                 alpha_u_mix = [gp.LinExpr() for _ in range(self.I1)]
@@ -395,10 +394,10 @@ class SOCP4LDR:
                     for p_val in self.p_list:
                         expr += self.Gu[(phi, t_val, p_val, k)]
                     alpha_u_mix[k] = expr
-                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_mix[k], name=f"alpha_u_{q}_{k}")
+                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_mix[k], name=f"alpha_u_mix_{phi}_{t_val}_{k}")
 
                 # gamma_q = 0.0
-                self.model.addConstr(self.gamma[q] == 0.0, name=f"gamma_{q}")
+                self.model.addConstr(self.gamma[q] == 0.0, name=f"gamma_mix_{phi}_{t_val}")
 
                 # self.alpha_z[q] = alpha_z_mix
                 # self.alpha_u[q] = alpha_u_mix
@@ -410,22 +409,22 @@ class SOCP4LDR:
 
                 # -G^0_{\phi t p}
                 alpha0_ng = -self.G0[(phi, t_val, p_val)]
-                self.model.addConstr(self.alpha0[q] == alpha0_ng, name=f"alpha0_{q}")
+                self.model.addConstr(self.alpha0[q] == alpha0_ng, name=f"alpha0_ng_{phi}_{t_val}_{p_val}")
 
                 # alpha^{ng,phi,t,p,(z)}_i = -G^{(z)}_{phi t p, i}
                 alpha_z_ng = [gp.LinExpr() for _ in range(self.I1)]
                 for i in range(self.I1):
                     alpha_z_ng[i] = -self.Gz[(phi, t_val, p_val, i)]
-                    self.model.addConstr(self.alpha_z[q, i] == alpha_z_ng[i], name=f"alpha_z_{q}_{i}")
+                    self.model.addConstr(self.alpha_z[q, i] == alpha_z_ng[i], name=f"alpha_z_ng_{phi}_{t_val}_{i}")
 
                 # alpha^{ng,phi,t,p,(u)}_k = -G^{(u)}_{phi t p, k}
                 alpha_u_ng = [gp.LinExpr() for _ in range(self.I1)]
                 for k in range(self.I1):
                     alpha_u_ng[k] = -self.Gu[(phi, t_val, p_val, k)]
-                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_ng[k], name=f"alpha_u_{q}_{k}")
+                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_ng[k], name=f"alpha_u_ng_{phi}_{t_val}_{k}")
 
                 # gamma_q = 0.0
-                self.model.addConstr(self.gamma[q] == 0.0, name=f"gamma_{q}")
+                self.model.addConstr(self.gamma[q] == 0.0, name=f"gamma_{phi}_{t_val}")
                 
                 # self.alpha_z[q] = alpha_z_ng
                 # self.alpha_u[q] = alpha_u_ng
@@ -437,22 +436,22 @@ class SOCP4LDR:
 
                 # alpha0_nr = (-R^0_{\phi t}
                 alpha0_nr = -self.R0[(phi, t_val)]
-                self.model.addConstr(self.alpha0[q] == alpha0_nr, name=f"alpha0_{q}")
+                self.model.addConstr(self.alpha0[q] == alpha0_nr, name=f"alpha0_nr_{phi}_{t_val}")
 
                 # alpha^{nr,phi,t,(z)}_i = -R^{(z)}_{phi t, i}
                 alpha_z_nr = [gp.LinExpr() for _ in range(self.I1)]
                 for i in range(self.I1):
                     alpha_z_nr[i] = -self.Rz[(phi, t_val, i)]
-                    self.model.addConstr(self.alpha_z[q, i] == alpha_z_nr[i], name=f"alpha_z_{q}_{i}")
+                    self.model.addConstr(self.alpha_z[q, i] == alpha_z_nr[i], name=f"alpha_z_nr_{phi}_{t_val}_{i}")
 
                 # alpha^{nr,phi,t,(u)}_k = -R^{(u)}_{phi t, k}
                 alpha_u_nr = [gp.LinExpr() for _ in range(self.I1)]
                 for k in range(self.I1):
                     alpha_u_nr[k] = -self.Ru[(phi, t_val, k)]
-                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_nr[k], name=f"alpha_u_{q}_{k}")
+                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_nr[k], name=f"alpha_u_nr_{phi}_{t_val}_{k}")
 
                 # gamma_q = 0.0
-                self.model.addConstr(self.gamma[q] == 0.0, name=f"gamma_{q}")
+                self.model.addConstr(self.gamma[q] == 0.0, name=f"gamma_nr_{phi}_{t_val}")
 
                 # self.alpha_z[q] = alpha_z_nr
                 # self.alpha_u[q] = alpha_u_nr
@@ -467,52 +466,53 @@ class SOCP4LDR:
             # C[: , i]^T * pi_q = alpha^{q,(z)}_i
             for i in range(self.I1):
                 expr = gp.LinExpr()
-                for j in range(3 * self.I1 + 1):
+                for j in range(2 * self.I1 + 2):
                     expr += self.C[j, i] * self.pi[q][j]
-                self.model.addConstr(expr == self.alpha_z[q, i], name=f"C_transpose_{q}_{i}")
+                self.model.addConstr(expr == self.alpha_z[q, i], name=f"C_transpose_{q}_{i}".replace(" ", "_"))
 
             # --- D^T pi_q = alpha^{q,(u)} ---
             for k in range(self.I1):
                 expr = gp.LinExpr()
-                for j in range(3 * self.I1 + 1):
+                for j in range(2 * self.I1 + 2):
                     expr += self.D[j, k] * self.pi[q][j]
-                self.model.addConstr(expr == self.alpha_u[q, k], name=f"D_transpose_{q}_{k}")
+                self.model.addConstr(expr == self.alpha_u[q, k], name=f"D_transpose_{q}_{k}".replace(" ", "_"))
 
             # --- d^T pi_q = gamma_q ---
             expr = gp.LinExpr()
-            for j in range(3 * self.I1 + 1):
+            for j in range(2 * self.I1 + 2):
                 expr += self.d[j] * self.pi[q][j]
-            self.model.addConstr(expr == self.gamma[q], name=f"d_transpose_{q}")
+            self.model.addConstr(expr == self.gamma[q], name=f"d_transpose_{q}".replace(" ", "_"))
 
             # --- E^T pi_q = 0
             # Todo: check if this is correct
-            # for j in range(3 * self.I1 + 1):
-            #     self.model.addConstr(self.E[j][j] * self.pi[q][j] == 0, name=f"E_transpose_{q}")
+            for j in range(2 * self.I1 + 2):
+                self.model.addConstr(self.E[j][j] * self.pi[q][j] == 0, name=f"E_transpose_{q}_{j}".replace(" ", "_"))
 
             # --- h^T pi_q <= -alpha0 ---
             expr = gp.LinExpr()
-            for j in range(3*self.I1 + 1):
+            for j in range(2*self.I1 + 2):
                 expr += self.h[j] * self.pi[q][j]
-            self.model.addConstr(expr <= -self.alpha0[q], name=f"h_transpose_{q}")
+            self.model.addConstr(expr <= -self.alpha0[q], name=f"h_transpose_{q}".replace(" ", "_"))
 
-            # --- Second-order cone constraint: ||odd||_2 <= sum(even) + last ---
-            odd_indices = [2*j for j in range(self.I1)]  # [0,2,4,...,2*(I1-1)]  --> corresponds to alpha^{(z)}
-            even_indices = [2*j+1 for j in range(self.I1)]  # [1,3,5,...,2*I1-1] --> corresponds to alpha^{(u)}
-            last_idx = 3 * self.I1  # index 3*I1
+            # --- Second-order cone constraint: π_q ⪰_K 0
+            pi_q = [self.pi[q][j] for j in range(2 * self.I1 + 2)]
+            # (1) I1 independent 2D SOC constraints: || [pi_q[2i]] ||_2 <= pi_q[2i+1]
+            for i in range(I1):
+                norm_part: list[gp.Var] = [pi_q[2 * i]]  # Scalar inside norm
+                upper_bound = pi_q[2 * i + 1]
+                left_var = self.model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"soc_single_{q}_{i}".replace(" ", "_"))
+                self.model.addConstr(left_var == gp.norm(norm_part, 2), name=f"soc_single_norm_{q}_{i}".replace(" ", "_"))
+                self.model.addConstr(left_var<=self.pi[q][2 * i + 1], name=f"soc_single_{q}_{i}".replace(" ", "_")) 
+                self.model.addConstr(upper_bound >= 0, name=f"soc_single_nonneg_{q}_{i}".replace(" ", "_"))
 
-            # Left side: Euclidean norm of pi_q[odd_indices]
-            odd_vars = [self.pi[q][j] for j in odd_indices]
-            left_norm_sq = gp.quicksum(v * v for v in odd_vars)
+            # (2) One (2)-dimensional SOC constraint: || [] pi_q[2I1-2]] ||_2 <= pi_q[2I1]
+            norm_vars: list[gp.Var] = [pi_q[2 * self.I1]]
+            upper_bound_var = pi_q[2 * I1 + 1]  # Last component
+            left_var = self.model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"soc_agg_{q}".replace(" ", "_"))
+            self.model.addConstr(left_var == gp.norm(norm_vars, 2), name=f"soc_agg_norm_{q}".replace(" ", "_"))
+            self.model.addConstr(left_var <= upper_bound_var, name=f"soc_agg_{q}".replace(" ", "_"))
+            self.model.addConstr(upper_bound_var >= 0, name=f"soc_agg_nonneg_{q}".replace(" ", "_"))
 
-            # Right side: sum(pi_q[even]) + pi_q[last]
-            right_side = gp.quicksum(self.pi[q][j] for j in even_indices) + self.pi[q][last_idx]
-
-            # Add auxiliary variable for SOC
-            soc_rhs = self.model.addVar(name=f"soc_rhs_{q}")
-            self.model.addConstr(soc_rhs == right_side)
-            self.model.addConstr(left_norm_sq <= soc_rhs * soc_rhs, name=f"soc_{q}")
-            self.model.addConstr(soc_rhs >= 0)
-        # --- Non-negativity of R^0 and G^0 already enforced in var creation ---
 
     def solve(self):
         # --- Optimize ---
@@ -537,6 +537,9 @@ class SOCP4LDR:
             }
         else:
             print(f"❌ Optimization failed with status {self.model.status}: {self.model.status}")
+            self.model.computeIIS()
+            self.model.write("model.ilp")
+            self.model.write("model.lp")
             return None, None
 
 
@@ -551,12 +554,12 @@ if __name__ == "__main__":
     I1 = 2
     phi_list = ['P1']
     t_list = [1, 2]
-    p_list = [1, 2]
+    p_list = [1]
     p_hat = {'P1': 1.0}
     # --- Cost coefficients ---
     c_phi_tp = {
-        ('P1', 1, 1): 100, ('P1', 1, 2): 120,
-        ('P1', 2, 1): 90,  ('P1', 2, 2): 110
+        ('P1', 1, 1): 100,
+        ('P1', 2, 1): 90
     }
     t_d_phi = {
         'P1': 2
