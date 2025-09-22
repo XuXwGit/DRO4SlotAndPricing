@@ -2,15 +2,39 @@ import numpy as np
 import gurobipy as gp
 from gurobipy import GRB
 
-
 class SOCP4LDR:
+    """
+    二阶段分布鲁棒优化 (SOCP-based LDR)
+    -------------------------------------------------------
+    说明：
+      - 用于求解给定第一阶段决策 X, Y 下的第二阶段问题 β(X, Y)。
+      - 第一阶段决策: X_phi, Y_phi (非负)
+      - 第二阶段通过 LDR 构建：G^0, G^{(z)}, G^{(u)}, R^0, R^{(z)}, R^{(u)}
+      - 利用对偶与锥对偶转换，得到 π_q 等对偶变量，并构造 SOCP 块
+      - 本实现把 alpha/gamma/delta 作为线性表达式 (LinExpr)，
+        与论文的线性化/对偶关系一一对应（详见方法注释）
+    """
+
     def __init__(self, I1, phi_list, t_list, p_list, p_hat, c_phi_tp, t_d_phi) -> None:
         """
-        Sets the parameters for the SOCP model.
-        
-        Parameters:
-            I1: int
-            mu, sigma_sq, Sigma: uncertainty set parameters
+        初始化并存储固定参数（不会被建为变量）。
+
+        参数:
+        ----------
+        I1 : int
+            不确定性维度 (ξ 的维数)。
+        phi_list : list of hashable
+            路径/产品集合 Φ。
+        t_list : list of int
+            时间段集合 T（通常从1开始; 若在模型中涉及 t=0, 请保证 d_0_phi_t 包含 t=0）。
+        p_list : list of numeric
+            价格/产品类型集合 P。
+        p_hat : dict (phi -> base price)
+            每条 phi 的基准价格 hat p_phi。
+        c_phi_tp : dict ((phi,t,p) -> cost)
+            成本系数 c_{φtp}（用于目标/obj α）。
+        t_d_phi : dict (phi -> t_deadline)
+            每个 φ 的需求有效期 t_φ(d)（用于 Δ / R 的 0/0 约束）。
         """
         self.I1 = I1
         self.phi_list = phi_list
@@ -20,599 +44,638 @@ class SOCP4LDR:
         self.c_phi_tp = c_phi_tp
         self.t_d_phi = t_d_phi
 
+    # ---------------- Data setters ----------------
     def set_uncertainty(self, mu, sigma_sq, Sigma):
+        """
+        设置不确定性参数：
+          mu : numpy array shape (I1,)           — E[z]
+          sigma_sq : numpy array shape (I1,)     — Var(z_i) or variance terms used in objective
+          Sigma : numpy array shape (I1,I1)      — 协方差矩阵 Cov(z)
+        """
         self.mu = mu
         self.sigma_sq = sigma_sq
         self.Sigma = Sigma
 
     def set_network(self, paths, A_prime):
+        """
+        网络信息：
+          paths : dict phi -> list of edges (edge as tuple (n,n'))
+          A_prime : dict edge -> capacity
+        说明：用于第一阶段容量约束 Σ_{φ : edge∈path(φ)} (X_φ + Y_φ) ≤ capacity.
+        """
         self.paths = paths
         self.A_prime = A_prime
 
     def set_demand_function(self, d_0_phi_t, a, d_z_phi_t_i):
+        """
+        需求函数相关参数：
+          d_0_phi_t : dict (phi,t) -> scalar  (deterministic base demand d^0_{φt})
+          a : scalar (price sensitivity)
+          d_z_phi_t_i : dict (phi,t,i) -> scalar (coefficient for z_i in demand)
+        说明：用于构造 Δ 表达式（见 set_delta_and_R）。
+        """
         self.d_0_phi_t = d_0_phi_t
         self.d_z_phi_t_i = d_z_phi_t_i
         self.a = a
 
-    def set_Q_list(self, Q_list):
+    def set_Q_list(self):
+        """
+        生成 Q_list（所有需要通过对偶/SOCP 处理的约束/目标的索引集合）。
+        Q 包含：
+          - 'obj'
+          - ('svc', phi, t)
+          - ('mix', phi, t)
+          - ('ng', phi, t, p)
+          - ('nr', phi, t)
+        这些 q 会在 add_constraints 中逐一处理（先构造 alpha/gamma，再构造 SOCP 块）。
+        """
+        Q_list = []
+        Q_list.append('obj')
+        for phi in self.phi_list:
+            for t in self.t_list:
+                Q_list.append(('svc', phi, t))
+                Q_list.append(('mix', phi, t))
+                for p in self.p_list:
+                    Q_list.append(('ng', phi, t, p))
+                Q_list.append(('nr', phi, t))
         self.Q_list = Q_list
 
+    def set_X_Y_value(self, X_value, Y_value):
+        """
+        设置 X, Y 的值（将一阶段变量固定为常数）。
+        """
+        for phi in self.phi_list:
+            self.X[phi].LB = X_value[phi]
+            self.X[phi].UB = X_value[phi]
+            self.Y[phi].LB = Y_value[phi]
+            self.Y[phi].UB = Y_value[phi]
 
     def set_matrix(self):
-        # --- Build matrices C, D, d, h ---
-        C = np.zeros((2 * self.I1 + 2, self.I1))
-        D = np.zeros((2 * self.I1 + 2, self.I1))
+        """
+        构造 C, D, d, h, E 矩阵（这些矩阵在论文中描述对偶/锥变换时出现）。
+        - C, D: 根据论文中对 π 与 α,γ 的线性关系构造
+        - d: 末项向量 (用于 d^T π = γ)
+        - h: 支撑函数系数 (用于 h^T π ≤ -α_0)
+        - E: 线性约束 (用于 E^T π = 0)
+        注意：如果你的论文里 C/D/h 有不同定义，请替换此处构造。
+        """
+        C = np.zeros((3 * self.I1 + 3, self.I1))
+        D = np.zeros((3 * self.I1 + 3, self.I1))
 
         for i in range(self.I1):
-            C[2*i, i] = 2.0           # row 2*i (0-indexed) = 2e_i^T
-            D[2*i+1, i] = 1.0      # row 2*i+1 = e_i^T
+            C[3*i, i] = 2.0
+            D[3*i+1, i] = 1.0
+            D[3*i+2, i] = 1.0
 
-        C[2*self.I1, :] = 2.0      # last row of C: 2*1^T
+        # 最后三行 C: [2 2 2,    d: [0
+        #                        0 0 0,         1 
+        #                        0 0 0]         1]
+        C[3*self.I1, :] = 2.0
 
-        d = np.zeros(2 * self.I1 + 2)
-        d[-1] = 1.0                     # d = [0,...,1]^T
+        d = np.zeros(3 * self.I1 + 3)
+        d[3*self.I1 + 1] = 1.0
+        d[3*self.I1 + 2] = 1.0
 
-        h = np.zeros(2 * self.I1 + 2)
+        # h 的构造常见于对偶支持函数：包含 mu 与常数项
+        h = np.zeros(3 * self.I1 + 3)
         for i in range(self.I1):
-            h[2*i] = 2 * self.mu[i]      # odd rows: 2*mu_i
-            h[2*i+1] = 1.0                  # even rows: 1
+            h[3*i] = 2 * self.mu[i]
+            h[3*i+1] = 1.0
+            h[3*i+2] = -1.0
+        h[3*self.I1] = 2 * sum(self.mu[i] for i in range(self.I1))
+        h[3*self.I1 + 1] = 1.0
+        h[3*self.I1 + 2] = -1.0
 
-        h[2*self.I1] = 2 * sum(self.mu[i] for i in range(self.I1))      # odd rows: 2*mu_i
-        h[2*self.I1 + 1] = 1.0           # last: 1
-
-        E = - np.eye(2 * self.I1 + 2)
+        # E = [ [0, 0, -1] ... [0, 0 , -1] ] 
+        E = - np.zeros((3 * self.I1 + 3, self.I1 + 1))
+        for i in range(self.I1 + 1):
+            E[3*i + 2, i] = -1
 
         self.C, self.D, self.d, self.h, self.E = C, D, d, h, E
 
+        # --- 调试输出 ---
+        print("\n--- DEBUG: Matrix Structure ---")
+        print("C matrix (shape: {}):".format(C.shape))
+        print(C)
+        print("D matrix (shape: {}):".format(D.shape))
+        print(D)
+        print("d vector:", d.shape)
+        print(d)
+        print("h vector:", h.shape)
+        print(h)
+        print("E matrix (shape: {}):".format(E.shape))
+        print(E)
+        print("--- END DEBUG ---\n")
 
+    # ---------------- Build & Variables ----------------
     def build_model(self):
-        try:
-            # --- Create Gurobi model ---
-            self.model = gp.Model("DRO_Slot_Allocation_Complete_SOCP")
-            self.model.Params.NonConvex = 2  # Required for SOC
-            self.set_matrix()
-            self.create_variables()
-            self.add_constraints()
-            self.set_objective()
-        except Exception as e:
-            print(f"Error building model: {e}")
+        """
+        整体建模入口：创建 Gurobi 模型对象，调用子函数建变量、添加约束、设目标。
+        """
+        self.model = gp.Model("DRO_Slot_Allocation_Complete_SOCP")
+        # 设置参数
+        self.model.Params.NonConvex = 2
+        self.model.Params.OutputFlag = 1
+
+        # 设置矩阵系数
+        self.set_matrix()
+        # 创建决策变量
+        self.create_variables()
+        # 添加约束
+        self.add_constraints()
+        # 设置目标函数
+        self.set_objective()
+
+        # update 并打印简单校验信息
         self.model.update()
         print("🔍 Model validation:")
         print(f"  Number of constraints: {self.model.numConstrs}")
         print(f"  Number of variables: {self.model.numVars}")
-        print(f"  Number of SOC constraints: {len([c for c in self.model.getConstrs() if 'soc_' in c.ConstrName])}")
-
 
     def create_variables(self):
-        # --- Decision Variables ---
-        # Stage I: (X, Y)
-        # \mathcal{X} = \left\{ (X, Y) \left| \sum_{\phi \in \Phi} (X_\phi + Y_\phi) \theta_{\phi nn'} \leq q_{nn'}, \quad \forall (n, n') \in \A; \quad X, Y \in \R^{|\Phi|}_+ \right. \right\}. \\
-        self.X = self.model.addVars(self.phi_list, lb=0.0, ub=GRB.INFINITY, name="X")
-        self.Y = self.model.addVars(self.phi_list, lb=0.0, ub=GRB.INFINITY, name="Y")
+        """
+        创建决策变量（仅变量创建，不添加约束）：
+          - 第一阶段: X[φ], Y[φ] (>=0)
+          - 第二阶段对偶: r, s_i, t_i (<=0), l (<=0)
+          - 线性决策规则系数: G0[φ,t,p] (prob alloc coeff), Gz[φ,t,p,i], Gu[φ,t,p,k]
+          - R 系数: R0[φ,t], Rz[φ,t,i], Ru[φ,t,k]
+          - π_q: 对于每个 q, 创建 2*I1+2 个对偶分量 self.pi[q][0..2I1+1]
+        说明/注意:
+          - 我把 G0 的下界设为 0（概率/权重通常非负）。如果论文允许负数，请改回 lb=-inf。
+          - 如果需要对 G0 施加 sum_p G0 == 1 或 <=1，请在 add_constraints 中添加（本文例子中未强制）。
+        """
+        # Stage I variables (nonnegative)  (非负，将被 set_X_Y_value 固定)
+        self.X = self.model.addVars(self.phi_list, lb=0.0, name="X")
+        self.Y = self.model.addVars(self.phi_list, lb=0.0, name="Y")
 
-        # Stage II: dual variables
+        # Stage II dual-like variables
         self.r = self.model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, name="r")
         self.s = self.model.addVars(self.I1, lb=-GRB.INFINITY, ub=GRB.INFINITY, name="s")
         self.t = self.model.addVars(self.I1, lb=-GRB.INFINITY, ub=0.0, name="t")   # t_k <= 0
-        self.l = self.model.addVar(lb=-GRB.INFINITY, ub=0.0, name="l")        # l <= 0
+        self.l = self.model.addVar(lb=-GRB.INFINITY, ub=0.0, name="l")              # l <= 0
 
-        # G^0: probability allocation
+        # G^0 (prob weights) — 我这里设置 lb=0（概率/权重）
         self.G0 = {}
-        for phi in self.phi_list:
-            for t_val in self.t_list:
-                for p_val in self.p_list:
-                    self.G0[(phi, t_val, p_val)] = self.model.addVar(
-                        lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"G0_{phi}_{t_val}_{p_val}"
-                    )
-
-        # G^{(z)}: linear coeff for z_i
         self.Gz = {}
-        for phi in self.phi_list:
-            for t_val in self.t_list:
-                for p_val in self.p_list:
-                    for i in range(self.I1):
-                        self.Gz[(phi, t_val, p_val, i)] = self.model.addVar(
-                            lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"Gz_{phi}_{t_val}_{p_val}_{i}"
-                        )
-
-        # G^{(u)}: linear coeff for u_k
         self.Gu = {}
         for phi in self.phi_list:
-            for t_val in self.t_list:
-                for p_val in self.p_list:
+            for t in self.t_list:
+                for p in self.p_list:
+                    # G0 非负建议 (概率权重)
+                    self.G0[(phi, t, p)] = self.model.addVar(lb=0.0, name=f"G0_{phi}_{t}_{p}")
+                    # Gz, Gu 表示 z,u 的线性系数，可以为实数
+                    for i in range(self.I1):
+                        self.Gz[(phi, t, p, i)] = self.model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"Gz_{phi}_{t}_{p}_{i}")
                     for k in range(self.I1):
-                        self.Gu[(phi, t_val, p_val, k)] = self.model.addVar(
-                            lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"Gu_{phi}_{t_val}_{p_val}_{k}"
-                        )
+                        self.Gu[(phi, t, p, k)] = self.model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"Gu_{phi}_{t}_{p}_{k}")
 
-        # R^0: base service cost
+        # LDR: R^0, R^{(z)}, R^{(u)} (service cost base & coefficients)
         self.R0 = {}
-        for phi in self.phi_list:
-            for t_val in self.t_list:
-                self.R0[(phi, t_val)] = self.model.addVar(
-                    lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"R0_{phi}_{t_val}"
-                )
-
-        # R^{(z)}: linear coeff for z_i in R
         self.Rz = {}
-        for phi in self.phi_list:
-            for t_val in self.t_list:
-                for i in range(self.I1):
-                    self.Rz[(phi, t_val, i)] = self.model.addVar(
-                        lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"Rz_{phi}_{t_val}_{i}"
-                    )
-
-        # R^{(u)}: linear coeff for u_k in R
         self.Ru = {}
         for phi in self.phi_list:
-            for t_val in self.t_list:
-                for k in range(self.I1):
-                    self.Ru[(phi, t_val, k)] = self.model.addVar(
-                        lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"Ru_{phi}_{t_val}_{k}"
-                    )
-
-        # pi_q for each q in Q
-        self.pi = {}
-        for q_idx, q in enumerate(self.Q_list):
-            self.pi[q] = self.model.addVars(2 * self.I1 + 2, lb=-GRB.INFINITY, name=f"pi_{q_idx}")
-
-        # auxiliary variables
-        self.delta0 = {}
-        self.delta_z = {}
-        self.delta_u = {}
-        self.delta = {"0": self.delta0, "z": self.delta_z, "u": self.delta_u}
-        for phi in self.phi_list:
-            for t_val in self.t_list:
-                self.delta0[(phi, t_val)] = self.model.addVar(
-                    lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"delta0_{phi}_{t_val}"
-                )
+            for t in self.t_list:
+                self.R0[(phi, t)] = self.model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"R0_{phi}_{t}")
                 for i in range(self.I1):
-                    self.delta_z[(phi, t_val, i)] = self.model.addVar(
-                        lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"deltaz_{phi}_{t_val}_{i}"
-                    )
+                    self.Rz[(phi, t, i)] = self.model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"Rz_{phi}_{t}_{i}")
                 for k in range(self.I1):
-                    self.delta_u[(phi, t_val, k)] = self.model.addVar(
-                        lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"deltau_{phi}_{t_val}_{k}"
-                    )
-        self.alpha0 = {}
-        self.alpha_z = {}
-        self.alpha_u = {}
-        self.alpha = {"0": self.alpha0, "z": self.alpha_z, "u": self.alpha_u}
+                    self.Ru[(phi, t, k)] = self.model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"Ru_{phi}_{t}_{k}")
+
+        # π_q variables: for each q an array of length 3*I1 + 3
+        self.pi = {}
         for q in self.Q_list:
-            self.alpha0[q] = self.model.addVar(
-                        lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"alpha0_{q}".replace(" ", "_")
-                    )
-            for i in range(self.I1):
-                self.alpha_z[(q, i)] = self.model.addVar(
-                            lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"alpha_z_{q}_{i}".replace(" ", "_")
-                        )
-            for k in range(self.I1):
-                self.alpha_u[(q, k)] = self.model.addVar(
-                            lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"alpha_u_{q}_{k}".replace(" ", "_")
-                        )
-        self.gamma = {}
-        for q in self.Q_list:
-            self.gamma[q] = self.model.addVar(
-                        lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"gamma_{q}".replace(" ", "_")
-                    )
+            # addVars returns a tupledict indexed by integers 0..(2I1+1)
+            self.pi[q] = self.model.addVars(3 * self.I1 + 3, lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"pi_{q}".replace(" ", "_"))
 
+        # alpha, gamma, delta — **作为表达式容器**（LinExpr），不再建成 Vars
+        self.alpha0 = {}   # alpha0[q] will be gp.LinExpr or Var-involving expr
+        self.alpha_z = {}  # alpha_z[(q,i)]
+        self.alpha_u = {}  # alpha_u[(q,k)]
+        self.gamma = {}    # gamma[q]
 
+        self.delta0 = {}   # delta0[(phi,t)] as LinExpr
+        self.delta_z = {}  # delta_z[(phi,t,i)]
+        self.delta_u = {}  # delta_u[(phi,t,k)]
 
+    # ---------------- Objective ----------------
     def set_objective(self):
-        # --- Objective Function ---
-        cost_cov = np.sum(self.Sigma)  # 1^T Sigma 1
+        """
+        目标函数（对应论文中的对偶形式）：
+          min r + sum_i s_i * mu_i + sum_i t_i * sigma_sq_i + l * (1^T Σ 1)
+        """
+        cost_cov = float(np.ones(self.I1) @ self.Sigma @ np.ones(self.I1))
+        obj = self.r + gp.quicksum(self.s[i] * self.mu[i] for i in range(self.I1)) + gp.quicksum(self.t[i] * self.sigma_sq[i] for i in range(self.I1)) + self.l * cost_cov
         self.model.setObjective(
-            self.r +
-            sum(self.s[i] * self.mu[i] for i in range(self.I1)) +
-            sum(self.t[i] * self.sigma_sq[i] for i in range(self.I1)) +
-            self.l * cost_cov,
+            obj,
             GRB.MINIMIZE
         )
 
-        # --- Constraint 1: Probability Allocation for G^0 ---
-        for phi in self.phi_list:
-            for t_val in self.t_list:
-                expr = gp.LinExpr()
-                for p_val in self.p_list:
-                    expr += self.G0[(phi, t_val, p_val)]
-                self.model.addConstr(expr == 1.0, name=f"prob_alloc_{phi}_{t_val}")
-
-
+    # ---------------- Constraints ----------------
     def add_constraints(self):
-        try:
-            self.add_first_stage_constraints()
-            self.set_delta_and_R()
-            for q in self.Q_list:
-                self.set_alpha_and_gamma(q)
-                self.set_SOCP_block(q)
-        except Exception as e:
-            print(f"error in adding constraints: {e}")
-    
+        """
+        添加全体约束的主入口：
+          - 第一阶段约束 (capacity)
+          - Δ 与 R 之间的关系（表达式）及“0 条件”
+          - 对每一个 q: 构造 α/γ 表达式并建立 SOCP 块（C^T π = α_z, D^T π = α_u, d^T π = γ, h^T π ≤ -α0）
+          - 对每个 π_q 添加锥约束 (||..|| ≤ ..)（使用 addGenConstrNorm）
+        """
+        # # 1) 第一阶段约束
+        # self.add_first_stage_constraints()
+        
+        # 2) delta & R 关系（构造表达式，添加 0/0 约束）
+        self.set_delta_and_R()
+        # 3) 对每个 q: 构造 alpha/gamma，并添加 SOCP 对偶约束块
+        for q in self.Q_list:
+            self.set_alpha_and_gamma(q)
+            self.set_SOCP_block(q)
 
     def add_first_stage_constraints(self):
-        # & \mathcal{X} = \left\{ (X, Y) \left| \sum_{\phi \in \Phi} (X_\phi + Y_\phi) \theta_{\phi nn'} \leq q_{nn'}, \quad \forall (n, n') \in \A; \quad X, Y \in \R^{|\Phi|}_+ \right. \right\}. \\
+        """
+        第一阶段网络容量约束：
+          对于每条边 e=(n,n') in A_prime: Σ_{φ: e∈paths[φ]} (X_φ + Y_φ) ≤ capacity_e
+        添加位置：模型中第一阶段约束（与论文中的可行集 X 一致）
+        """
         for edge, capacity in self.A_prime.items():
-            n, n_prime = edge
             expr = gp.LinExpr()
             for phi in self.phi_list:
                 if edge in self.paths.get(phi, []):
                     expr += self.X[phi] + self.Y[phi]
-            self.model.addConstr(expr <= capacity, name=f"first_stage_{n}_{n_prime}")
-            
+            self.model.addConstr(expr <= capacity, name=f"first_stage_{edge}")
 
     def set_delta_and_R(self):
+        """
+        构造 Δ 表达式，并依据 t_d_phi 添加零/零互斥约束：
+        论文形式（示例）：
+          Δ^0_{φt}          = R^0_{φt} - Y_φ + Σ_{t'<t} ( d^0_{φt'} - a Σ_p p G^0_{φt'p} - a p̂_φ )
+          Δ^{(z)}_{φt,i}  = R^{(z)}_{φt,i} + Σ_{t'<t} ( d^{(z)}_{φt',i} - a Σ_p p G^{(z)}_{φt'p,i} )
+          Δ^{(u)}_{φt,k} = R^{(u)}_{φt,k} - a Σ_{t'<t} Σ_p p G^{(u)}_{φt'p,k}
+        约束：
+          如果 1 ≤t ≤ t_d_phi[φ]，则 Δ^*_{φt,*} == 0 （需求期内，递推公式带入LDR，这些量为0）
+          否则 (t > t_d), R^*_{φt,*} == 0 （超出需求期，R 置 0）
+        实现：
+          - Δ 以 LinExpr 存储 self.delta0[(φ,t)] 等
+          - 直接对 Δ 或 R 添加等式约束
+        """
         for phi in self.phi_list:
-            for t in range(1, len(self.t_list)):
-                t_val = self.t_list[t]
-                # \Delta^0_{\phi t} = R^0_{\phi t} - Y_\phi + \sum_{t'=0}^{t-1} \left( d^0_{\phi t'} - a \sum_p p G^0_{\phi t' p} - a \hat{p}_\phi \right) \\
-                self.model.addConstr(
-                    self.delta0[(phi, t_val)] == self.R0[(phi, t_val)] - self.Y[phi] + sum(self.d_0_phi_t[(phi, t_prime)] - self.a * self.G0[(phi, t_prime, p_val)] - self.a * self.p_hat[phi] for t_prime in self.t_list[:t-1] for p_val in self.p_list), name=f"delta0_{phi}_{t_val}"
+            for t in self.t_list:
+                # Δ^0 表达式
+                expr0 = self.R0[(phi, t)] - self.Y[phi] + gp.quicksum(
+                    (self.d_0_phi_t.get((phi, tp), 0.0)
+                     - self.a * gp.quicksum(self.G0[(phi, tp, p)] * p for p in self.p_list)
+                     - self.a * self.p_hat.get(phi, 0.0))
+                    for tp in self.t_list if tp < t
                 )
-                # \Delta^{(z)}_{\phi t, i} = R^{(z)}_{\phi t, i} + \sum_{t'=0}^{t-1} \left( d^{(z)}_{\phi t', i} - a \sum_p p G^{(z)}_{\phi t' p, i} \right) \\
+                self.delta0[(phi, t)] = expr0
+
+                # Δ^{(z)} 表达式
                 for i in range(self.I1):
-                    self.model.addConstr(
-                        self.delta_z[(phi, t_val, i)] == self.Rz[(phi, t_val, i)] + sum(self.d_z_phi_t_i[(phi, t_prime, i)] - self.a * self.Gz[(phi, t_prime, p_val, i)] for t_prime in self.t_list[:t-1] for p_val in self.p_list), name=f"deltaz_{phi}_{t_val}_{i}"
+                    exprz = self.Rz[(phi, t, i)] + gp.quicksum(
+                        (self.d_z_phi_t_i.get((phi, tp, i), 0.0)
+                         - self.a * gp.quicksum(self.Gz[(phi, tp, p, i)] * p for p in self.p_list))
+                        for tp in self.t_list if tp < t
                     )
-                # \Delta^{(u)}_{\phi t, k} = R^{(u)}_{\phi t, k} - a \sum_{t'=0}^{t-1} \sum_p p G^{(u)}_{\phi t' p, k}.
+                    self.delta_z[(phi, t, i)] = exprz
+
+                # Δ^{(u)} 表达式
                 for k in range(self.I1):
-                    self.model.addConstr(
-                        self.delta_u[(phi, t_val, k)] == self.Ru[(phi, t_val, k)] - self.a * sum(self.Gu[(phi, t_prime, p_val, k)] for t_prime in self.t_list[:t-1] for p_val in self.p_list), name=f"deltau_{phi}_{t_val}_{k}"
+                    expru = self.Ru[(phi, t, k)] - self.a * gp.quicksum(
+                        self.Gu[(phi, tp, p, k)] * p for tp in self.t_list if tp < t for p in self.p_list
                     )
+                    self.delta_u[(phi, t, k)] = expru
 
-        for phi in self.phi_list:
-            for t in range(1, len(self.t_list)):
-                t_val = self.t_list[t]
-                if t_val <= self.t_d_phi.get(phi, 0):
-                    # \Delta^0_{\phi t} = 0, \quad 1 \forall \phi \in \Phi, \leq t \leq t_\phi(d) \\
-                    self.model.addConstr(self.delta0[(phi, t_val)] == 0.0, name=f"delta00_{phi}_{t_val}")
-                    # \Delta^{(z)}_{\phi t, i} = 0 \quad \forall \phi \in \Phi, \forall i, 1 \leq t \leq t_\phi(d) \\
+                # 根据 t_d_phi 添加 Δ^*_{φt,*} == 0 或 R^*_{φt,*} == 0 的约束
+                if t >= 1 and t <= self.t_d_phi.get(phi, 0):
+                    # 在需求有效期内，带入仿射公式，Δ = 0（论文中的边界条件）
+                    self.model.addConstr(self.delta0[(phi, t)] == 0.0, name=f"delta0_zero_{phi}_{t}")
                     for i in range(self.I1):
-                        self.model.addConstr(self.delta_z[(phi, t_val, i)] == 0.0, name=f"deltaz0_{phi}_{t_val}_{i}")
-                    # \Delta^{(u)}_{\phi t, k} = 0 \quad \forall \phi \in \Phi, \forall k=1,\dots,I_, 1 \leq t \leq t_\phi(d) \\
+                        self.model.addConstr(self.delta_z[(phi, t, i)] == 0.0, name=f"deltaz_zero_{phi}_{t}_{i}")
                     for k in range(self.I1):
-                        self.model.addConstr(self.delta_u[(phi, t_val, k)] == 0.0, name=f"deltau0_{phi}_{t_val}_{k}")
-                else:
-                    # R^0_{\phi t} = 0 \quad \forall \phi \in \Phi, t \geq t_\phi(d)+1 \\
-                    self.model.addConstr(self.R0[(phi, t_val)] == 0.0, name=f"R0_{phi}_{t_val}")
-                    # R^{(z)}_{\phi t, i} = 0 \quad \forall \phi \in \Phi, \forall i, t \geq t_\phi(d)+1\\
+                        self.model.addConstr(self.delta_u[(phi, t, k)] == 0.0, name=f"deltau_zero_{phi}_{t}_{k}")
+                # else:
+                    # 超出有效期 => R 系数应为 0（论文中的另一端点条件）
+                    self.model.addConstr(self.R0[(phi, t)] == 0.0, name=f"R0_zero_{phi}_{t}")
                     for i in range(self.I1):
-                        self.model.addConstr(self.Rz[(phi, t_val, i)] == 0.0, name=f"Rz_{phi}_{t_val}_{i}")
-                    # R^{(u)}_{\phi t, k} = 0 \quad \forall \phi \in \Phi, \forall k=1,\dots,I_1, t \geq t_\phi(d)+1\\
+                        self.model.addConstr(self.Rz[(phi, t, i)] == 0.0, name=f"Rz_zero_{phi}_{t}_{i}")
                     for k in range(self.I1):
-                        self.model.addConstr(self.Ru[(phi, t_val, k)] == 0.0, name=f"Ru_{phi}_{t_val}_{k}")
+                        self.model.addConstr(self.Ru[(phi, t, k)] == 0.0, name=f"Ru_zero_{phi}_{t}_{k}")
 
+    def set_alpha_and_gamma(self, q):
+        """
+        对每个 q ∈ Q_list 构造 α^{q,(z)}, α^{q,(u)}, α^q_0, γ^q 的线性表达式 (LinExpr)。
+        论文中这些 α/γ 是对偶线性组合的结果，我们在这里直接按章节公式逐项展开。
 
-    def set_alpha_and_gamma(self, q):        
-        # --- Constraint 2: Define alpha for each q type ---
-        # For each q, compute alpha^{q,(z)}, alpha^{q,(u)}, alpha^q_0, gamma_q
-        # These are not stored as vars, but computed from G,R,r,l 
-        if q ==  'obj':
-                # alpha0_obj = r - sum_{phi,t,p} c_{phi t p} G^0_{phi t p}
-                alpha0_obj = self.r
-                for phi in self.phi_list:
-                    for t_val in self.t_list:
-                        for p_val in self.p_list:
-                            alpha0_obj -= self.c_phi_tp.get((phi, t_val, p_val), 0.0) * self.G0[(phi, t_val, p_val)]
-                self.model.addConstr(self.alpha0[q] == alpha0_obj, name=f"alpha0_{q}")
+        q types (展开规则):
+          - 'obj': 目标项 -> α0 = r - Σ_{φ,t,p} c_{φtp} G0_{φtp}
+                    α^{(z)}_i = - Σ c_{φtp} Gz_{φtp,i}
+                    α^{(u)}_k = - Σ c_{φtp} Gu_{φtp,k}
+                    γ = l
+          - ('svc', φ, t): 服务水平项
+                    α0 = d^0_{φt} - a Σ_p p G0_{φtp} - R0_{φt} + a p̂_φ
+                    α^{(z)}_i = d^{(z)}_{φt,i} - a Σ_p p Gz_{φtp,i} - Rz_{φt,i}
+                    α^{(u)}_k = - a Σ_p p Gu_{φtp,k} - Ru_{φt,k}
+                    γ = 0
+          - ('mix', φ, t): 混合约束（概率和为1/或表述）
+                    α0 = Σ_p G0_{φtp} - 1
+                    α^{(z)}_i = Σ_p Gz_{φtp,i}
+                    α^{(u)}_k = Σ_p Gu_{φtp,k}
+                    γ = 0
+          - ('ng', φ, t, p): G 非负相关（在论文里对应的 q）
+                    α0 = - G0_{φtp}
+                    α^{(z)}_i = - Gz_{φtp,i}
+                    α^{(u)}_k = - Gu_{φtp,k}
+                    γ = 0
+          - ('nr', φ, t): R 非负相关
+                    α0 = - R0_{φt}
+                    α^{(z)}_i = - Rz_{φt,i}
+                    α^{(u)}_k = - Ru_{φt,k}
+                    γ = 0
+        """
+        # obj case
+        if q == 'obj':
+            # α0_obj = r - Σ c_{φtp} * G0_{φtp}
+            self.alpha0[q] = self.r - gp.quicksum(
+                self.c_phi_tp.get((phi, t, p), 0.0) * self.G0[(phi, t, p)]
+                for phi in self.phi_list for t in self.t_list for p in self.p_list
+            )
+            # α_z^{obj}_i = s - Σ c * Gz
+            for i in range(self.I1):
+                self.alpha_z[(q, i)] = self.s[i] -gp.quicksum(
+                    self.c_phi_tp.get((phi, t, p), 0.0) * self.Gz[(phi, t, p, i)]
+                    for phi in self.phi_list for t in self.t_list for p in self.p_list
+                )
+            # α_u^{obj}_k = t - Σ c * Gu
+            for k in range(self.I1):
+                self.alpha_u[(q, k)] = self.t[k] -gp.quicksum(
+                    self.c_phi_tp.get((phi, t, p), 0.0) * self.Gu[(phi, t, p, k)]
+                    for phi in self.phi_list for t in self.t_list for p in self.p_list
+                )
+            # γ_obj = l
+            self.gamma[q] = self.l
 
-                # alpha^{obj,(z)}_i = - sum_{phi,t,p} c_{phi t p} G^{(z)}_{phi t p, i}
-                alpha_z_obj = [gp.LinExpr() for _ in range(self.I1)]
-                for i in range(self.I1):
-                    expr = gp.LinExpr()
-                    for phi in self.phi_list:
-                        for t_val in self.t_list:
-                            for p_val in self.p_list:
-                                expr -= self.c_phi_tp.get((phi, t_val, p_val), 0.0) * self.Gz[(phi, t_val, p_val, i)]
-                    alpha_z_obj[i] = expr
-                    self.model.addConstr(self.alpha_z[q, i] == alpha_z_obj[i], name=f"alpha_z_{q}_{i}")
-
-                # alpha^{obj,(u)}_k = - sum_{phi,t,p} c_{phi t p} G^{(u)}_{phi t p, k}
-                alpha_u_obj = [gp.LinExpr() for _ in range(self.I1)]
-                for k in range(self.I1):
-                    expr = gp.LinExpr()
-                    for phi in self.phi_list:
-                        for t_val in self.t_list:
-                            for p_val in self.p_list:
-                                expr -= self.c_phi_tp.get((phi, t_val, p_val), 0.0) * self.Gu[(phi, t_val, p_val, k)]
-                    alpha_u_obj[k] = expr
-                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_obj[k], name=f"alpha_u_obj_{q}_{k}")
-
-                # gamma_q = self.l  # for objective
-                self.model.addConstr(self.gamma[q] == self.l, name=f"gamma_obj_{q}")
-                            
-                # self.alpha_z[q] = alpha_z_obj
-                # self.alpha_u[q] = alpha_u_obj
-                # self.alpha0[q] = alpha0_obj
-                # self.gamma[q] = gamma_q
-
+        # svc case
         elif isinstance(q, tuple) and q[0] == 'svc':
-                phi, t_val = q[1], q[2]
+            phi, t = q[1], q[2]
+            # α0_svc = d^0_{φt} - a Σ_p p G0_{φtp} - R0_{φt} + a p̂_φ
+            self.alpha0[q] = (self.d_0_phi_t.get((phi, t), 0.0)
+                              - self.a * gp.quicksum(p * self.G0[(phi, t, p)] for p in self.p_list)
+                              - self.R0[(phi, t)]
+                              + self.a * self.p_hat.get(phi, 0.0))
+            # α_z^{svc}_i = d^{(z)}_{φt,i} - a Σ_p p Gz_{φtp,i} - Rz_{φt,i}
+            for i in range(self.I1):
+                self.alpha_z[(q, i)] = (self.d_z_phi_t_i.get((phi, t, i), 0.0)
+                                         - self.a * gp.quicksum(p * self.Gz[(phi, t, p, i)] for p in self.p_list)
+                                         - self.Rz[(phi, t, i)])
+            # α_u^{svc}_k = - a Σ_p p Gu_{φtp,k} - Ru_{φt,k}
+            for k in range(self.I1):
+                self.alpha_u[(q, k)] = (- self.a * gp.quicksum(p * self.Gu[(phi, t, p, k)] for p in self.p_list)
+                                         - self.Ru[(phi, t, k)])
+            # γ_svc = 0
+            self.gamma[q] = gp.LinExpr(0.0)
 
-                # alpha0_svc = d^0_{\phi t} - a \sum_p p G^0_{\phi t p} - R^0_{\phi t} + a \hat{p}_\phi 
-                alpha0_svc = 0
-                expr = self.d_0_phi_t.get((phi, t_val), 0.0)
-                for p_val in self.p_list:
-                    expr -= self.a * p_val * self.G0[(phi, t_val, p_val)]
-                expr -= self.R0[(phi, t_val)]
-                expr += self.a * self.p_hat[phi]
-                alpha0_svc= expr
-                self.model.addConstr(self.alpha0[q] == alpha0_svc, name=f"alpha0_svc_{phi}_{t_val}")
-
-
-                # alpha^{svc,phi,t,(z)}_i = d^{(z)}_{phi t, i} - a * sum_p p * G^{(z)}_{phi t p, i} - R^{(z)}_{phi t, i}
-                alpha_z_svc = [gp.LinExpr() for _ in range(self.I1)]
-                for i in range(self.I1):
-                    expr = self.d_z_phi_t_i.get((phi, t_val, i), 0.0)
-                    for p_val in self.p_list:
-                        expr -= self.a * p_val * self.Gz[(phi, t_val, p_val, i)]
-                    expr -= self.Rz[(phi, t_val, i)]
-                    alpha_z_svc[i] = expr
-                    self.model.addConstr(self.alpha_z[q, i] == alpha_z_svc[i], name=f"alpha_z_svc_{phi}_{t_val}_{i}")
-
-                # alpha^{svc,phi,t,(u)}_k = -a * sum_p p * G^{(u)}_{phi t p, k} - R^{(u)}_{phi t, k}
-                alpha_u_svc = [gp.LinExpr() for _ in range(self.I1)]
-                for k in range(self.I1):
-                    expr = 0.0
-                    for p_val in self.p_list:
-                        expr -= self.a * p_val * self.Gu[(phi, t_val, p_val, k)]
-                    expr -= self.Ru[(phi, t_val, k)]
-                    alpha_u_svc[k] = expr
-                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_svc[k], name=f"alpha_u_svc_{phi}_{t_val}_{k}")
-
-                # gamma_q = 0.0
-                self.model.addConstr(self.gamma[q] == 0.0, name=f"gamma_svc_{phi}_{t_val}")
-
-                # self.alpha_z[q]=alpha_z_svc
-                # self.alpha_u[q] = alpha_u_svc
-                # self.alpha0[q] = alpha0_svc
-                # self.gamma[q] = gamma_q
-
+        # mix case
         elif isinstance(q, tuple) and q[0] == 'mix':
-                phi, t_val = q[1], q[2]
+            phi, t = q[1], q[2]
+            # α0_mix = Σ_p G0_{φtp} - 1
+            self.alpha0[q] = gp.quicksum(self.G0[(phi, t, p)] for p in self.p_list) - 1.0
+            for i in range(self.I1):
+                self.alpha_z[(q, i)] = gp.quicksum(self.Gz[(phi, t, p, i)] for p in self.p_list)
+            for k in range(self.I1):
+                self.alpha_u[(q, k)] = gp.quicksum(self.Gu[(phi, t, p, k)] for p in self.p_list)
+            self.gamma[q] = gp.LinExpr(0.0)
 
-                # alpha0_mix = \sum_p G^0_{\phi t p} - 1
-                alpha0_mix = gp.LinExpr()
-                for p_val in self.p_list:
-                    alpha0_mix += self.G0[(phi, t_val, p_val)]
-                alpha0_mix -= 1
-                self.model.addConstr(self.alpha0[q] == alpha0_mix, name=f"alpha0_mix_{phi}_{t_val}")
-
-
-                # alpha^{mix,phi,t,(z)}_i = sum_p G^{(z)}_{phi t p, i}
-                alpha_z_mix = [gp.LinExpr() for _ in range(self.I1)]
-                for i in range(self.I1):
-                    expr = gp.LinExpr()
-                    for p_val in self.p_list:
-                        expr += self.Gz[(phi, t_val, p_val, i)]
-                    alpha_z_mix[i] = expr
-                    self.model.addConstr(self.alpha_z[q, i] == alpha_z_mix[i], name=f"alpha_z_mix_{phi}_{t_val}_{i}")
-
-                # alpha^{mix,phi,t,(u)}_k = sum_p G^{(u)}_{phi t p, k}
-                alpha_u_mix = [gp.LinExpr() for _ in range(self.I1)]
-                for k in range(self.I1):
-                    expr = gp.LinExpr()
-                    for p_val in self.p_list:
-                        expr += self.Gu[(phi, t_val, p_val, k)]
-                    alpha_u_mix[k] = expr
-                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_mix[k], name=f"alpha_u_mix_{phi}_{t_val}_{k}")
-
-                # gamma_q = 0.0
-                self.model.addConstr(self.gamma[q] == 0.0, name=f"gamma_mix_{phi}_{t_val}")
-
-                # self.alpha_z[q] = alpha_z_mix
-                # self.alpha_u[q] = alpha_u_mix
-                # self.alpha0[q] = alpha0_mix
-                # self.gamma[q] = gamma_q
-
+        # ng case (G nonneg)
         elif isinstance(q, tuple) and q[0] == 'ng':
-                phi, t_val, p_val = q[1], q[2], q[3]
+            phi, t, p = q[1], q[2], q[3]
+            self.alpha0[q] = - self.G0[(phi, t, p)]
+            for i in range(self.I1):
+                self.alpha_z[(q, i)] = - self.Gz[(phi, t, p, i)]
+            for k in range(self.I1):
+                self.alpha_u[(q, k)] = - self.Gu[(phi, t, p, k)]
+            self.gamma[q] = gp.LinExpr(0.0)
 
-                # -G^0_{\phi t p}
-                alpha0_ng = -self.G0[(phi, t_val, p_val)]
-                self.model.addConstr(self.alpha0[q] == alpha0_ng, name=f"alpha0_ng_{phi}_{t_val}_{p_val}")
-
-                # alpha^{ng,phi,t,p,(z)}_i = -G^{(z)}_{phi t p, i}
-                alpha_z_ng = [gp.LinExpr() for _ in range(self.I1)]
-                for i in range(self.I1):
-                    alpha_z_ng[i] = -self.Gz[(phi, t_val, p_val, i)]
-                    self.model.addConstr(self.alpha_z[q, i] == alpha_z_ng[i], name=f"alpha_z_ng_{phi}_{t_val}_{i}")
-
-                # alpha^{ng,phi,t,p,(u)}_k = -G^{(u)}_{phi t p, k}
-                alpha_u_ng = [gp.LinExpr() for _ in range(self.I1)]
-                for k in range(self.I1):
-                    alpha_u_ng[k] = -self.Gu[(phi, t_val, p_val, k)]
-                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_ng[k], name=f"alpha_u_ng_{phi}_{t_val}_{k}")
-
-                # gamma_q = 0.0
-                self.model.addConstr(self.gamma[q] == 0.0, name=f"gamma_{phi}_{t_val}")
-                
-                # self.alpha_z[q] = alpha_z_ng
-                # self.alpha_u[q] = alpha_u_ng
-                # self.alpha0[q] = alpha0_ng
-                # self.gamma[q] = gamma_q
-
+        # nr case (R nonneg)
         elif isinstance(q, tuple) and q[0] == 'nr':
-                phi, t_val = q[1], q[2]
-
-                # alpha0_nr = (-R^0_{\phi t}
-                alpha0_nr = -self.R0[(phi, t_val)]
-                self.model.addConstr(self.alpha0[q] == alpha0_nr, name=f"alpha0_nr_{phi}_{t_val}")
-
-                # alpha^{nr,phi,t,(z)}_i = -R^{(z)}_{phi t, i}
-                alpha_z_nr = [gp.LinExpr() for _ in range(self.I1)]
-                for i in range(self.I1):
-                    alpha_z_nr[i] = -self.Rz[(phi, t_val, i)]
-                    self.model.addConstr(self.alpha_z[q, i] == alpha_z_nr[i], name=f"alpha_z_nr_{phi}_{t_val}_{i}")
-
-                # alpha^{nr,phi,t,(u)}_k = -R^{(u)}_{phi t, k}
-                alpha_u_nr = [gp.LinExpr() for _ in range(self.I1)]
-                for k in range(self.I1):
-                    alpha_u_nr[k] = -self.Ru[(phi, t_val, k)]
-                    self.model.addConstr(self.alpha_u[q, k] == alpha_u_nr[k], name=f"alpha_u_nr_{phi}_{t_val}_{k}")
-
-                # gamma_q = 0.0
-                self.model.addConstr(self.gamma[q] == 0.0, name=f"gamma_nr_{phi}_{t_val}")
-
-                # self.alpha_z[q] = alpha_z_nr
-                # self.alpha_u[q] = alpha_u_nr
-                # self.alpha0[q] = alpha0_nr
-                # self.gamma[q] = gamma_q
+            phi, t = q[1], q[2]
+            self.alpha0[q] = - self.R0[(phi, t)]
+            for i in range(self.I1):
+                self.alpha_z[(q, i)] = - self.Rz[(phi, t, i)]
+            for k in range(self.I1):
+                self.alpha_u[(q, k)] = - self.Ru[(phi, t, k)]
+            self.gamma[q] = gp.LinExpr(0.0)
 
         else:
-                raise ValueError(f"Unknown constraint type: {q}")
+            raise ValueError(f"Unknown q type: {q}")
 
     def set_SOCP_block(self, q):
-            # --- Dual Constraints: C^T pi_q = alpha^{q,(z)} ---
-            # C[: , i]^T * pi_q = alpha^{q,(z)}_i
-            for i in range(self.I1):
-                expr = gp.LinExpr()
-                for j in range(2 * self.I1 + 2):
-                    expr += self.C[j, i] * self.pi[q][j]
-                self.model.addConstr(expr == self.alpha_z[q, i], name=f"C_transpose_{q}_{i}".replace(" ", "_"))
+        """
+        对每个 q 添加对偶线性等式与 SOCP 锥约束：
+          - C^T π_q = α^{q,(z)}   (I1 条等式)
+          - D^T π_q = α^{q,(u)}   (I1 条等式)
+          - d^T π_q = γ_q              (1 条等式)
+          - h^T π_q ≤ - α^q_0        (1 条不等式)
+          - E^T π_q = 0                  (I1 + 1 条等式)
+          - π_q ⪰_K 0                    (SOC锥约束：对每一对 (2i,2i+1) 以及最后一对 (2I1,2I1+1) 添加 Norm 约束)
+        """
+        # 1) z: C^T π_q = α_z
+        for i in range(self.I1):
+            lhs = gp.quicksum(self.C[j, i] * self.pi[q][j] for j in range(3 * self.I1 + 3))
+            self.model.addConstr(lhs == self.alpha_z[(q, i)], name=f"Ctrans_q{q}_i{i}".replace(" ", "_"))
 
-            # --- D^T pi_q = alpha^{q,(u)} ---
-            for k in range(self.I1):
-                expr = gp.LinExpr()
-                for j in range(2 * self.I1 + 2):
-                    expr += self.D[j, k] * self.pi[q][j]
-                self.model.addConstr(expr == self.alpha_u[q, k], name=f"D_transpose_{q}_{k}".replace(" ", "_"))
+        # 2) u: D^T π_q = α_u
+        for k in range(self.I1):
+            lhs = gp.quicksum(self.D[j, k] * self.pi[q][j] for j in range(3 * self.I1 + 3))
+            self.model.addConstr(lhs == self.alpha_u[(q, k)], name=f"Dtrans_q{q}_k{k}".replace(" ", "_"))
 
-            # --- d^T pi_q = gamma_q ---
-            expr = gp.LinExpr()
-            for j in range(2 * self.I1 + 2):
-                expr += self.d[j] * self.pi[q][j]
-            self.model.addConstr(expr == self.gamma[q], name=f"d_transpose_{q}".replace(" ", "_"))
+        # 3) u_{I1+1}: d^T π_q = γ_q
+        lhs = gp.quicksum(self.d[j] * self.pi[q][j] for j in range(3 * self.I1 + 3))
+        self.model.addConstr(lhs == self.gamma[q], name=f"dtrans_q{q}".replace(" ", "_"))
 
-            # --- E^T pi_q = 0
-            # Todo: check if this is correct
-            for j in range(2 * self.I1 + 2):
-                self.model.addConstr(self.E[j][j] * self.pi[q][j] == 0, name=f"E_transpose_{q}_{j}".replace(" ", "_"))
+        # 4) v: E^T π_q = 0 : 对每对 (2i,2i+1) 使用 LinEq 约束，最后一对 (2I1,2I1+1) 也一样
+        for i in range(self.I1 + 1):
+            lhs = gp.quicksum(self.E[j, i] * self.pi[q][j] for j in range(3 * self.I1 + 3))
+            self.model.addConstr(lhs == 0.0, name=f"Epi_q{q}_agg".replace(" ", "_"))
 
-            # --- h^T pi_q <= -alpha0 ---
-            expr = gp.LinExpr()
-            for j in range(2*self.I1 + 2):
-                expr += self.h[j] * self.pi[q][j]
-            self.model.addConstr(expr <= -self.alpha0[q], name=f"h_transpose_{q}".replace(" ", "_"))
+        # 5) h^T π_q <= - α0_q
+        lhs = gp.quicksum(self.h[j] * self.pi[q][j] for j in range(3 * self.I1 + 3))
+        self.model.addConstr(lhs <= - self.alpha0[q], name=f"htrans_q{q}".replace(" ", "_"))
 
-            # --- Second-order cone constraint: π_q ⪰_K 0
-            pi_q = [self.pi[q][j] for j in range(2 * self.I1 + 2)]
-            # (1) I1 independent 2D SOC constraints: || [pi_q[2i]] ||_2 <= pi_q[2i+1]
-            for i in range(I1):
-                norm_part: list[gp.Var] = [pi_q[2 * i]]  # Scalar inside norm
-                upper_bound = pi_q[2 * i + 1]
-                left_var = self.model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"soc_single_{q}_{i}".replace(" ", "_"))
-                self.model.addConstr(left_var == gp.norm(norm_part, 2), name=f"soc_single_norm_{q}_{i}".replace(" ", "_"))
-                self.model.addConstr(left_var<=self.pi[q][2 * i + 1], name=f"soc_single_{q}_{i}".replace(" ", "_")) 
-                self.model.addConstr(upper_bound >= 0, name=f"soc_single_nonneg_{q}_{i}".replace(" ", "_"))
+        # 6) π_q ⪰_K 0 : 对每对 (3i, 3i+1) 使用 Norm 约束，最后一对 (3I1, 3I1+1) 也一样
+        #   - 使用 addGenConstrNorm(RHSvar, list_of_vars, 2) 来添加 ||vars||_2 ≤ RHSvar
+        #   - 为确保 RHSvar 非负（锥定义），显式添加 RHSvar ≥ 0
+        #    每一对规范为: || [π_q[3i], π_q[3i+q]] ||_2 ≤ π_q[3i+2], 且 π_q[3i+2] ≥ 0
+        for i in range(self.I1):
+            norm_var = [self.pi[q][3 * i], self.pi[q][3 * i + 1]]               # 向量里的变量（这里是单个变量）
+            rhs_var = self.pi[q][3 * i + 2]              # RHS 变量（必须是 Var）
+            # RHS 需非负
+            self.model.addConstr(rhs_var >= 0.0, name=f"pi_nonneg_q{q}_idx{2*i+1}".replace(" ", "_"))
+            # ||norm_var||_2 <= rhs_var  (gen constr)
+            self.model.addGenConstrNorm(rhs_var, norm_var, 2, name=f"norm_q{q}_pair{i}".replace(" ", "_"))
 
-            # (2) One (2)-dimensional SOC constraint: || [] pi_q[2I1-2]] ||_2 <= pi_q[2I1]
-            norm_vars: list[gp.Var] = [pi_q[2 * self.I1]]
-            upper_bound_var = pi_q[2 * I1 + 1]  # Last component
-            left_var = self.model.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"soc_agg_{q}".replace(" ", "_"))
-            self.model.addConstr(left_var == gp.norm(norm_vars, 2), name=f"soc_agg_norm_{q}".replace(" ", "_"))
-            self.model.addConstr(left_var <= upper_bound_var, name=f"soc_agg_{q}".replace(" ", "_"))
-            self.model.addConstr(upper_bound_var >= 0, name=f"soc_agg_nonneg_{q}".replace(" ", "_"))
+        # # aggregate last pair (index 3*I1, 3*I1+1)
+        agg_norm_var = [self.pi[q][3 * self.I1], self.pi[q][3 * self.I1 + 1]]
+        agg_rhs_var = self.pi[q][3 * self.I1 + 2]
+        self.model.addConstr(agg_rhs_var >= 0.0, name=f"pi_nonneg_q{q}_last".replace(" ", "_"))
+        self.model.addGenConstrNorm(agg_rhs_var, agg_norm_var, 2, name=f"norm_q{q}_agg".replace(" ", "_"))
 
-
-    def solve(self):
-        # --- Optimize ---
+    # ---------------- Solve & extract ----------------
+    def solve(self, verbose=True):
+        """
+        优化并输出结果。
+        """
         self.model.optimize()
 
         if self.model.status == GRB.OPTIMAL:
-            print(f"✅ Optimal objective: {self.model.objVal:.6f}")
-            return self.model.objVal, {
-                'x': {phi: self.X[phi].X for phi in self.phi_list},
-                'y': {phi: self.Y[phi].X for phi in self.phi_list},
-                'r': self.r.X,
-                's': [self.s[i].X for i in range(self.I1)],
-                't': [self.t[i].X for i in range(self.I1)],
-                'l': self.l.X,
-                'G0': {(phi,t,p): self.G0[(phi,t,p)].X for phi in self.phi_list for t in self.t_list for p in self.p_list},
-                'Gz': {(phi,t,p,i): self.Gz[(phi,t,p,i)].X for phi in self.phi_list for t in self.t_list for p in self.p_list for i in range(self.I1)},
-                'Gu': {(phi,t,p,k): self.Gu[(phi,t,p,k)].X for phi in self.phi_list for t in self.t_list for p in self.p_list for k in range(self.I1)},
-                'R0': {(phi,t): self.R0[(phi,t)].X for phi in self.phi_list for t in self.t_list},
-                'Rz': {(phi,t,i): self.Rz[(phi,t,i)].X for phi in self.phi_list for t in self.t_list for i in range(self.I1)},
-                'Ru': {(phi,t,k): self.Ru[(phi,t,k)].X for phi in self.phi_list for t in self.t_list for k in range(self.I1)},
-                'pi': {q: [self.pi[q][j].X for j in range(3*self.I1+1)] for q in Q_list},
-            }
+            if verbose:
+                print(f"✅ Optimal objective (β(X,Y)): {self.model.objVal:.6f}")
+            return True, self.model.objVal
+
+        elif self.model.status == GRB.INF_OR_UNBD:
+            if verbose:
+                print("❌ Model is infeasible or unbounded.")
+                # 计算不可行子系统 (IIS)
+                self.model.computeIIS()
+                print("\n🔍 Computing Irreducible Inconsistent Subsystem (IIS):")
+                for c in self.model.getConstrs():
+                    if c.IISConstr:
+                        print(f"  🚫 Constraint '{c.ConstrName}' is in the IIS.")
+                for gc in self.model.getGenConstrs():
+                    if gc.IISGenConstr:
+                        print(f"  🚫 GenConstraint '{gc.GenConstrName}' is in the IIS.")
+                # 将 IIS 写入文件以便详细查看
+                self.model.write("model_iis.ilp")
+                print("  📄 IIS written to 'model_iis.ilp'")
+            return False, None
+
+        elif self.model.status == GRB.UNBOUNDED:
+            if verbose:
+                print("❌ Model unbounded")
+            return False, None
+
+        elif self.model.status == GRB.INFEASIBLE:
+            if verbose:
+                print("❌ Model infeasible")
+                # 计算不可行子系统 (IIS)
+                self.model.computeIIS()
+                print("\n🔍 Computing Irreducible Inconsistent Subsystem (IIS):")
+                for c in self.model.getConstrs():
+                    if c.IISConstr:
+                        print(f"  🚫 Constraint '{c.ConstrName}' is in the IIS.")
+                for gc in self.model.getGenConstrs():
+                    if gc.IISGenConstr:
+                        print(f"  🚫 GenConstraint '{gc.GenConstrName}' is in the IIS.")
+                self.model.write("model_iis.ilp")
+                print("  📄 IIS written to 'model_iis.ilp'")
+            return False, None
+
         else:
-            print(f"❌ Optimization failed with status {self.model.status}: {self.model.status}")
-            self.model.computeIIS()
-            self.model.write("model.ilp")
-            self.model.write("model.lp")
-            return None, None
+            if verbose:
+                print(f"❌ Optimization terminated with status {self.model.status}")
+            return False, None
+        
+    def get_solution(self):
+        """
+        返回关键变量的解（如果模型已求解且最优）。
+        """
+        if self.model.status != GRB.OPTIMAL:
+            return None
+
+        solution = {
+            'r': self.r.X,
+            's': [self.s[i].X for i in range(self.I1)],
+            't': [self.t[k].X for k in range(self.I1)],
+            'l': self.l.X,
+            'G0': {(phi, t, p): self.G0[(phi, t, p)].X for phi in self.phi_list for t in self.t_list for p in self.p_list},
+            'Gz': {(phi, t, p, i): self.Gz[(phi, t, p, i)].X for phi in self.phi_list for t in self.t_list for p in self.p_list for i in range(self.I1)},
+            'Gu': {(phi, t, p, k): self.Gu[(phi, t, p, k)].X for phi in self.phi_list for t in self.t_list for p in self.p_list for k in range(self.I1)},
+            'R0': {(phi, t): self.R0[(phi, t)].X for phi in self.phi_list for t in self.t_list},
+            'Rz': {(phi, t, i): self.Rz[(phi, t, i)].X for phi in self.phi_list for t in self.t_list for i in range(self.I1)},
+            'Ru': {(phi, t, k): self.Ru[(phi, t, k)].X for phi in self.phi_list for t in self.t_list for k in range(self.I1)},
+        }
+
+        return solution
 
 
-# ================================
-# 🚀 示例用法：模拟数据
-# ================================
-
+# ================= Example usage / 测试 =================
 if __name__ == "__main__":
-    
-
-    # --- Problem Dimensions ---
-    I1 = 2
-    phi_list = ['P1']
-    t_list = [1, 2]
-    p_list = [1]
-    p_hat = {'P1': 1.0}
-    # --- Cost coefficients ---
+    # 示例数据（小规模，便于调试）
+    # --- 1. 定义测试参数 ---
+    I1 = 2  # 不确定性维度 (z1, z2)
+    phi_list = ["P1", "P2"]  # 2 条路径
+    t_list = [1, 2, 3]  # 3 个时间段
+    p_list = [10.0, 15.0]  # 2 个价格点
+    p_hat = {"P1": 5.0, "P2": 6.0}  # 每条路径的基准价格
+    # 成本系数 c_{φtp}，假设成本随价格升高而增加
     c_phi_tp = {
-        ('P1', 1, 1): 100,
-        ('P1', 2, 1): 90
+        ("P1", 1, 10.0): 2.0, ("P1", 1, 15.0): 3.0,
+        ("P1", 2, 10.0): 2.1, ("P1", 2, 15.0): 3.1, # 成本随时间略有上升
+        ("P1", 3, 10.0): 2.2, ("P1", 3, 15.0): 3.2,
+        ("P2", 1, 10.0): 1.8, ("P2", 1, 15.0): 2.8,
+        ("P2", 2, 10.0): 1.9, ("P2", 2, 15.0): 2.9,
+        ("P2", 3, 10.0): 2.0, ("P2", 3, 15.0): 3.0,
     }
-    t_d_phi = {
-        'P1': 2
-    }
-     # phi_list,              # list of paths: e.g., ['P1','P2']
-    # t_list,                  # list of time periods: e.g., [1,2,3]
-    # p_list,                 # list of product types: e.g., [1,2]
-    socp = SOCP4LDR(I1=I1, 
-                    phi_list=phi_list, 
-                    t_list=t_list, 
-                    p_list=p_list, 
-                    p_hat=p_hat, 
-                    c_phi_tp=c_phi_tp, 
-                    t_d_phi=t_d_phi)
+    # 需求有效期：P1 在 t=2 后离港，P2 在 t=3 后离港
+    t_d_phi = {"P1": 2, "P2": 3}
 
-    # --- Uncertainty parameters ---
-    mu = np.array([0.5, 0.7])
-    sigma_sq = np.array([0.1, 0.15])
-    Sigma = np.array([[0.1, 0.02],
-                      [0.02, 0.15]])
+    # 不确定性参数
+    mu = np.array([1.0, 0.4])  # E[z1]=1.0, E[z2]=0.4
+    sigma_sq = np.array([1.0, 0.16])  # Var(z1)<=1.0, Var(z2)<=0.16
+    # 协方差矩阵，假设 z1 和 z2 轻微正相关
+    Sigma = np.array([[1.0, 0.2], [0.2, 0.16]])  # 1^T Σ 1 = 1.0 + 2*0.2 + 0.16 = 1.56
+
+    # 网络参数 (占位，用于完整性)
+    paths = {
+        "P1": [("A", "B"), ("B", "C")],  # P1 经过 A->B, B->C
+        "P2": [("A", "D"), ("D", "C")]   # P2 经过 A->D, D->C
+    }
+    A_prime = {
+        ("A", "B"): 100.0,
+        ("B", "C"): 80.0,
+        ("A", "D"): 90.0,
+        ("D", "C"): 85.0
+    }
+
+    # 需求参数
+    # 基础需求 d0
+    d_0_phi_t = {
+        ("P1", 1): 8.0, ("P1", 2): 7.0, ("P1", 3): 0.0, # t=3 时 P1 已离港，需求为0
+        ("P2", 1): 9.0, ("P2", 2): 8.5, ("P2", 3): 8.0
+    }
+    # 需求对 z 的敏感度 d(z)
+    # 假设 z1 影响所有路径和时段，z2 主要影响 P2
+    d_z_phi_t_i = {
+        # P1 受 z1 影响
+        ("P1", 1, 0): 2.0, ("P1", 2, 0): 1.8, ("P1", 3, 0): 0.0,
+        ("P1", 1, 1): 0.0, ("P1", 2, 1): 0.0, ("P1", 3, 1): 0.0,
+        # P2 受 z1 和 z2 影响
+        ("P2", 1, 0): 2.2, ("P2", 2, 0): 2.0, ("P2", 3, 0): 1.8,
+        ("P2", 1, 1): 1.0, ("P2", 2, 1): 0.9, ("P2", 3, 1): 0.8,
+    }
+    a = 1.0  # 价格敏感度
+
+    # 第一阶段决策 (固定值)
+    X_value = {"P1": 2.0, "P2": 3.0}  # 长协客户分配
+    Y_value = {"P1": 5.0, "P2": 6.0}  # 临时客户预留
+
+
+    socp = SOCP4LDR(I1=I1, phi_list=phi_list, t_list=t_list, p_list=p_list,
+                    p_hat=p_hat, c_phi_tp=c_phi_tp, t_d_phi=t_d_phi)
+    # 不确定性参数
     socp.set_uncertainty(mu=mu, sigma_sq=sigma_sq, Sigma=Sigma)
 
-    # --- network information ---
-    paths = {'P1': [(1, 2), (2, 3)]}
-    A_prime = {(1,2): 1, (2,3):1}
+    # 网络
     socp.set_network(paths=paths, A_prime=A_prime)
 
-    # --- Service parameters ---
-    d_0_phi_t = {('P1', 0): 0.5, ('P1', 1): 0.6,
-                   ('P1', 0): 0.4, ('P1', 1): 0.7}
-    d_z_phi_t_i = {('P1', 1, 0): 0.5, ('P1', 1, 1): 0.6,
-                   ('P1', 2, 0): 0.4, ('P1', 2, 1): 0.7}
-    a = 1.0
+    # 需求相关参数
     socp.set_demand_function(d_0_phi_t=d_0_phi_t, a=a, d_z_phi_t_i=d_z_phi_t_i)
 
+    # Q 集合
+    socp.set_Q_list()
 
-    # --- Define Q: one obj, two svc, two mix, four ng, two nr ---
-    Q_list = [
-        'obj',
-        ('svc', 'P1', 1), 
-        ('svc', 'P1', 2),
-        ('mix', 'P1', 1), 
-        ('mix', 'P1', 2),
-        ('ng', 'P1', 1, 1), 
-        ('ng', 'P1', 1, 2),
-        ('ng', 'P1', 2, 1), 
-        ('ng', 'P1', 2, 2),
-        ('nr', 'P1', 1), 
-        ('nr', 'P1', 2)
-    ]
-    socp.set_Q_list(Q_list=Q_list)
-
-    # --- Solve ---
+    # Build & solve
     socp.build_model()
 
+    # 设置 X 和 Y 的值
+    socp.set_X_Y_value(X_value=X_value, Y_value=Y_value)
+
+    # Solve the second stage problem
     socp.solve()
