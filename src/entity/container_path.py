@@ -192,58 +192,6 @@ class ContainerPath:
         return self.path_time
 
 
-
-    @property
-    def total_transship_time(self) -> int:
-        """
-        获取总转运时间
-
-        """
-        return self.total_transship_time
-
-    @total_transship_time.setter
-    def total_transship_time(self, value: int):
-        """
-        设置总转运时间
-
-        """
-        self.total_transship_time = value
-
-
-    @property
-    def number_of_path(self) -> int:
-        """
-        获取路径数量
-
-        """
-        return self.number_of_path
-
-    @number_of_path.setter
-    def number_of_path(self, value: int):
-        """
-        设置路径数量
-
-        """
-        self.number_of_path = value
-
-
-    @property
-    def number_of_arcs(self) -> int:
-        """
-        获取弧数量
-
-        """
-        return self.number_of_arcs
-
-    @number_of_arcs.setter
-    def number_of_arcs(self, value: int):
-        """
-        设置弧数量
-
-        """
-        self.number_of_arcs = value
-
-
     @property
     def cost(self) -> float:
         """
@@ -252,22 +200,6 @@ class ContainerPath:
         """
         return self.path_cost
 
-
-    @property
-    def path_cost(self) -> float:
-        """
-        获取路径成本
-
-        """
-        return self.path_cost
-
-    @path_cost.setter
-    def path_cost(self, value: float):
-        """
-        设置路径成本
-
-        """
-        self.path_cost = value
 
     @property
     def laden_path_cost(self):

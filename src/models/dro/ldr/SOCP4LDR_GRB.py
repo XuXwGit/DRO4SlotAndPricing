@@ -1,10 +1,9 @@
 import numpy as np
-import gurobipy as gp
-
 import os
 import sys
+import gurobipy as gp
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 print(PROJECT_ROOT)
 sys.path.insert(0, PROJECT_ROOT)
 
@@ -61,9 +60,6 @@ class SOCP4LDR(ModelBuilder):
           - 线性决策规则系数: G0[φ,t,p] (prob alloc coeff), Gz[φ,t,p,i], Gu[φ,t,p,k]
           - R 系数: R0[φ,t], Rz[φ,t,i], Ru[φ,t,k]
           - π_q: 对于每个 q, 创建 2*I1+2 个对偶分量 self.pi[q][0..2I1+1]
-        说明/注意:
-          - 我把 G0 的下界设为 0（概率/权重通常非负）。如果论文允许负数，请改回 lb=-inf。
-          - 如果需要对 G0 施加 sum_p G0 == 1 或 <=1，请在 add_constraints 中添加（本文例子中未强制）。
         """
         # Stage I variables (nonnegative)  (非负，将被 set_X_Y_value 固定)
         self.X = self.model.addVars(self.phi_list, lb=0.0, vtype=VType.CONTINUOUS, name="X")
@@ -73,7 +69,7 @@ class SOCP4LDR(ModelBuilder):
         self.r = self.model.addVar(lb=-self.INF , ub=self.INF , vtype=VType.CONTINUOUS, name="r")
         self.s = self.model.addVars(self.I1, lb=-self.INF , ub=self.INF , vtype=VType.CONTINUOUS, name="s")
         self.t = self.model.addVars(self.I1, lb=-self.INF , ub=0.0, vtype=VType.CONTINUOUS, name="t")              # t_k <= 0
-        self.l = self.model.addVar(lb=-self.INF , ub=0.0, vtype=VType.CONTINUOUS, name="l")              # l <= 0
+        self.l = self.model.addVar(lb=-self.INF , ub=0.0, vtype=VType.CONTINUOUS, name="l")                                     # l <= 0
 
         # G^0 (prob weights)
         self.G0 = {}
@@ -124,10 +120,10 @@ class SOCP4LDR(ModelBuilder):
         """
         目标函数（对应论文中的对偶形式）：
           max:
-            - Stage I:  Σ_φ X_φ
+            - Stage I:  Σ_φ p^hat_φ X_φ
             - Stage II:  r + sum_i s_i * mu_i + sum_i t_i * sigma_sq_i + l * (1^T Σ 1)
         """
-        obj1 = gp.quicksum(self.X[phi] for phi in self.phi_list)
+        obj1 = gp.quicksum(self.p_hat[phi] * self.X[phi] for phi in self.phi_list)
         obj2 = self.r + gp.quicksum(self.s[i] * self.mu[i] for i in range(self.I1)) + gp.quicksum(self.t[i] * self.sigma_sq[i] for i in range(self.I1)) + self.l * self.cost_cov
         self.model.setObjective(
             obj1 + obj2,
@@ -152,7 +148,6 @@ class SOCP4LDR(ModelBuilder):
         self.set_delta_and_R()
         # 3) 对每个 q: 构造 alpha/gamma，并添加 SOCP 对偶约束块
         for q in self.Q_list:
-            self.set_alpha_and_gamma(q)
             self.add_SOCP_block(q)
 
         self.model.update()
@@ -277,17 +272,15 @@ class SOCP4LDR(ModelBuilder):
                 for phi in self.phi_list for t in self.t_list for p in self.p_list
             )
             # α_z^{obj}_i = s - Σ c * Gz
-            for i in range(self.I1):
-                self.alpha_z[(q, i)] = self.s[i] -gp.quicksum(
+            self.alpha_z[q] = [self.s[i] -gp.quicksum(
                     self.c_phi_tp.get((phi, t, p), 0.0) * self.Gz[(phi, t, p, i)]
                     for phi in self.phi_list for t in self.t_list for p in self.p_list
-                )
+                ) for i in range(self.I1)]
             # α_u^{obj}_k = t - Σ c * Gu
-            for k in range(self.I1):
-                self.alpha_u[(q, k)] = self.t[k] -gp.quicksum(
+            self.alpha_u[q] = [self.t[k] -gp.quicksum(
                     self.c_phi_tp.get((phi, t, p), 0.0) * self.Gu[(phi, t, p, k)]
                     for phi in self.phi_list for t in self.t_list for p in self.p_list
-                )
+                ) for k in range(self.I1)]
             # γ_obj = l
             self.gamma[q] = self.l
 
@@ -300,14 +293,12 @@ class SOCP4LDR(ModelBuilder):
                               - self.R0[(phi, t)]
                               + self.a * self.p_hat.get(phi, 0.0))
             # α_z^{svc}_i = d^{(z)}_{φt,i} - a Σ_p p Gz_{φtp,i} - Rz_{φt,i}
-            for i in range(self.I1):
-                self.alpha_z[(q, i)] = (self.d_z_phi_t_i.get((phi, t, i), 0.0)
+            self.alpha_z[q] = [(self.d_z_phi_t_i.get((phi, t, i), 0.0)
                                          - self.a * gp.quicksum(p * self.Gz[(phi, t, p, i)] for p in self.p_list)
-                                         - self.Rz[(phi, t, i)])
+                                         - self.Rz[(phi, t, i)]) for i in range(self.I1)]
             # α_u^{svc}_k = - a Σ_p p Gu_{φtp,k} - Ru_{φt,k}
-            for k in range(self.I1):
-                self.alpha_u[(q, k)] = (- self.a * gp.quicksum(p * self.Gu[(phi, t, p, k)] for p in self.p_list)
-                                         - self.Ru[(phi, t, k)])
+            self.alpha_u[q] = [(- self.a * gp.quicksum(p * self.Gu[(phi, t, p, k)] for p in self.p_list)
+                                         - self.Ru[(phi, t, k)]) for k in range(self.I1)]
             # γ_svc = 0
             self.gamma[q] = gp.LinExpr(0.0)
 
@@ -316,30 +307,24 @@ class SOCP4LDR(ModelBuilder):
             phi, t = q[1], q[2]
             # α0_mix = Σ_p G0_{φtp} - 1
             self.alpha0[q] = gp.quicksum(self.G0[(phi, t, p)] for p in self.p_list) - 1.0
-            for i in range(self.I1):
-                self.alpha_z[(q, i)] = gp.quicksum(self.Gz[(phi, t, p, i)] for p in self.p_list)
-            for k in range(self.I1):
-                self.alpha_u[(q, k)] = gp.quicksum(self.Gu[(phi, t, p, k)] for p in self.p_list)
+            self.alpha_z[q] = [gp.quicksum(self.Gz[(phi, t, p, i)] for p in self.p_list) for i in range(self.I1)]
+            self.alpha_u[q] = [gp.quicksum(self.Gu[(phi, t, p, k)] for p in self.p_list) for k in range(self.I1)]
             self.gamma[q] = gp.LinExpr(0.0)
 
         # ng case (G nonneg)
         elif isinstance(q, tuple) and q[0] == 'ng':
             phi, t, p = q[1], q[2], q[3]
             self.alpha0[q] = - self.G0[(phi, t, p)]
-            for i in range(self.I1):
-                self.alpha_z[(q, i)] = - self.Gz[(phi, t, p, i)]
-            for k in range(self.I1):
-                self.alpha_u[(q, k)] = - self.Gu[(phi, t, p, k)]
+            self.alpha_z[q] = [- self.Gz[(phi, t, p, i)] for i in range(self.I1)]
+            self.alpha_u[q] = [- self.Gu[(phi, t, p, k)] for k in range(self.I1)]
             self.gamma[q] = gp.LinExpr(0.0)
 
         # nr case (R nonneg)
         elif isinstance(q, tuple) and q[0] == 'nr':
             phi, t = q[1], q[2]
             self.alpha0[q] = - self.R0[(phi, t)]
-            for i in range(self.I1):
-                self.alpha_z[(q, i)] = - self.Rz[(phi, t, i)]
-            for k in range(self.I1):
-                self.alpha_u[(q, k)] = - self.Ru[(phi, t, k)]
+            self.alpha_z[q] = [- self.Rz[(phi, t, i)] for i in range(self.I1)]
+            self.alpha_u[q] = [- self.Ru[(phi, t, k)] for k in range(self.I1)]
             self.gamma[q] = gp.LinExpr(0.0)
 
         else:
@@ -368,15 +353,17 @@ class SOCP4LDR(ModelBuilder):
 
     @timeit_if_debug
     def set_dual_linear_constr(self, q):
+        self.set_alpha_and_gamma(q)
+
         # 1) z: C^T π_q = α_z
         for i in range(self.I1):
             lhs = gp.quicksum(self.C[j, i] * self.pi[q][j] for j in range(3 * self.I1 + 3))
-            self.model.addConstr(lhs == self.alpha_z[(q, i)], name=f"Ctrans_q{q}_i{i}".replace(" ", "_"))
+            self.model.addConstr(lhs == self.alpha_z[q][i], name=f"Ctrans_q{q}_i{i}".replace(" ", "_"))
 
         # 2) u: D^T π_q = α_u
         for k in range(self.I1):
             lhs = gp.quicksum(self.D[j, k] * self.pi[q][j] for j in range(3 * self.I1 + 3))
-            self.model.addConstr(lhs == self.alpha_u[(q, k)], name=f"Dtrans_q{q}_k{k}".replace(" ", "_"))
+            self.model.addConstr(lhs == self.alpha_u[q][k], name=f"Dtrans_q{q}_k{k}".replace(" ", "_"))
 
         # 3) u_{I1+1}: d^T π_q = γ_q
         lhs = gp.quicksum(self.d[j] * self.pi[q][j] for j in range(3 * self.I1 + 3))

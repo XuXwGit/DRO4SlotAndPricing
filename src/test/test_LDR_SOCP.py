@@ -1,12 +1,19 @@
 from typing import Any, Dict
 import numpy as np
+import os
+import sys
 
-from models.dro.ldr.SOCP4LDR_GRB import SOCP4LDR
-from dro.ldr.SOCP4LDR_Mosek import SOCP4LDR_Mosek
-from dro.ldr.LDR_model_checker import run_all_validations
-from utils.data_manager import DataManager
-from utils.read_data import DataReader
-from utils.model_params import construct_model_params, generate_feasible_test_case
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+print(PROJECT_ROOT)
+sys.path.insert(0, PROJECT_ROOT)
+
+from src.models.dro.ldr.SOCP4LDR_GRB import SOCP4LDR
+from src.models.dro.ldr.SOCP4LDR_Mosek import SOCP4LDR_Mosek
+from src.models.dro.ldr.LDR_model_checker import run_all_validations
+from src.utils.data_manager import DataManager
+from src.utils.read_data import DataReader
+from src.utils.model_params import construct_model_params, generate_feasible_test_case
 
 # ================= 使用示例 =================
 if __name__ == "__main__":
@@ -35,7 +42,7 @@ if __name__ == "__main__":
             seed=42  # 固定种子以复现结果
         )
 
-    socp = SOCP4LDR(model_params=model_params)
+    # socp = SOCP4LDR(model_params=model_params)
     socp = SOCP4LDR_Mosek(model_params=model_params)
 
     socp.build_model()
