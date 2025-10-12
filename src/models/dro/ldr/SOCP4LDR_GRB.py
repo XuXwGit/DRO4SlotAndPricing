@@ -29,7 +29,7 @@ class SOCP4LDR(ModelBuilder):
 
         参数:
         """
-        super().__init__(info="SOCP4LDR")
+        super().__init__(info="SOCP4LDR", solver="gurobi")
         self.set_model_params(model_params)
 
     # ---------------- Build & Variables ----------------
@@ -42,8 +42,6 @@ class SOCP4LDR(ModelBuilder):
         self.model.Params.NonConvex = 2
         self.model.Params.OutputFlag = 1
 
-        # 设置矩阵系数
-        self.set_matrixs()
         # 创建决策变量
         self.create_variables()
         # 添加约束
@@ -51,11 +49,8 @@ class SOCP4LDR(ModelBuilder):
         # 设置目标函数
         self.set_objective()
 
-        # update 并打印简单校验信息
-        self.model.update()
-        print("🔍 Model Info 🔍:")
-        print(f"  Number of constraints: {self.model.numConstrs}")
-        print(f"  Number of variables: {self.model.numVars}")
+        # 打印模型简单信息
+        self.print_model_info()
 
     @timeit_if_debug
     def create_variables(self):
@@ -133,8 +128,7 @@ class SOCP4LDR(ModelBuilder):
             - Stage II:  r + sum_i s_i * mu_i + sum_i t_i * sigma_sq_i + l * (1^T Σ 1)
         """
         obj1 = gp.quicksum(self.X[phi] for phi in self.phi_list)
-        cost_cov = float(np.ones(self.I1) @ self.Sigma @ np.ones(self.I1))
-        obj2 = self.r + gp.quicksum(self.s[i] * self.mu[i] for i in range(self.I1)) + gp.quicksum(self.t[i] * self.sigma_sq[i] for i in range(self.I1)) + self.l * cost_cov
+        obj2 = self.r + gp.quicksum(self.s[i] * self.mu[i] for i in range(self.I1)) + gp.quicksum(self.t[i] * self.sigma_sq[i] for i in range(self.I1)) + self.l * self.cost_cov
         self.model.setObjective(
             obj1 + obj2,
             MAXIMIZE
@@ -159,7 +153,9 @@ class SOCP4LDR(ModelBuilder):
         # 3) 对每个 q: 构造 alpha/gamma，并添加 SOCP 对偶约束块
         for q in self.Q_list:
             self.set_alpha_and_gamma(q)
-            self.set_SOCP_block(q)
+            self.add_SOCP_block(q)
+
+        self.model.update()
 
     @timeit_if_debug
     def add_first_stage_constraints(self):
@@ -350,7 +346,7 @@ class SOCP4LDR(ModelBuilder):
             raise ValueError(f"Unknown q type: {q}")
 
     @timeit_if_debug
-    def set_SOCP_block(self, q):
+    def add_SOCP_block(self, q):
         """
         对每个 q 添加对偶线性等式与 SOCP 锥约束：
           - C^T π_q = α^{q,(z)}   (I1 条等式)
