@@ -1,0 +1,441 @@
+# ===================================================================
+# 通用操作系统文件
+# ===================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ===================================================================
+# 编辑器和 IDE 临时/缓存文件
+# ===================================================================
+
+# Vim
+*~
+# netrw backup files
+*.swp
+*.swo
+
+# Emacs
+*#
+\#*\#
+
+# Nano
+.*.swp
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Sublime Text
+SublimeText/
+*.sublime-project
+*.sublime-workspace
+
+# IntelliJ / Android Studio / JetBrains IDEs
+.idea/
+*.iml
+*.iws
+out/
+build/
+*.aux
+*.class
+*.jar
+*.war
+*.ear
+*.hprof
+.DS_Store
+*.ipr
+*.iws
+*.pyc
+*.pyo
+__pycache__/
+*.egg-info/
+dist/
+build/
+*.orig
+*.rej
+*~
+
+# Eclipse
+.project
+.cproject
+.settings/
+.metadata/
+bin/
+tmp/
+*.tmp
+
+# NetBeans
+nbproject/
+build/
+dist/
+
+# Visual Studio
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.vcxproj.filters
+Debug/
+Release/
+x64/
+x86/
+build/
+*.obj
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.manifest
+
+# ===================================================================
+# Python
+# ===================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+env.bak/
+venv.bak/
+ENV.bak/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.pyre/
+.pytype/
+.mypy_cache/
+.pytest_cache/
+.hypothesis/
+
+# 虚拟环境
+.env
+.venv
+env/
+venv/
+
+# ===================================================================
+# C / C++
+# ===================================================================
+# 编译对象文件
+*.o
+*.ko
+*.obj
+*.elf
+
+# 编译可执行文件
+*.out
+*.exe
+*.bin
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+
+# 调试符号
+*.dSYM/
+*.map
+
+# 构建目录
+build/
+cmake-build-*/
+CMakeFiles/
+Makefile
+cmake_install.cmake
+compile_commands.json
+
+# ===================================================================
+# Java
+# ===================================================================
+*.class
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# Log files
+*.log
+logs/
+*.trace
+
+# Package Files
+*.war
+*.ear
+
+# Runtime files
+hot-deploy/
+target/
+.classpath
+.project
+.settings/
+
+# Maven
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# ===================================================================
+# LaTeX / TeX
+# ===================================================================
+*.aux
+*.bbl
+*.blg
+*.brf
+*.idx
+*.ind
+*.lof
+*.lot
+*.out
+*.toc
+*.fls
+*.log
+*.fdb_latexmk
+*.synctex.gz
+*.synctex.gz(busy)
+*.pdf.backup
+*.tex.backup
+*.backup
+
+# 编译中间文件
+_intermediate/
+_output/
+
+# 自动生成的 PDF（可选：如果你不想提交 PDF）
+*.pdf
+*.dvi
+*.ps
+*.eps
+
+# TeXstudio
+*.bcf
+*.xml
+*.run.xml
+
+# Overleaf 同步（可选）
+*.synctex.gz
+*.synctex.gz(busy)
+
+# ===================================================================
+# Web / HTML / CSS / JavaScript
+# ===================================================================
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+.pnpm-debug.log
+node_modules/
+dist/
+build/
+coverage/
+.nyc_output/
+
+# npm
+package-lock.json
+npm-shrinkwrap.json
+
+# yarn
+yarn.lock
+
+# pnpm
+pnpm-lock.yaml
+
+# Bower
+bower_components/
+
+# Webpack
+.bundle/
+.webpack/
+
+# Next.js
+.next/
+out/
+
+# Nuxt.js
+.nuxt/
+dist/
+
+# Vue.js
+.vuepress/dist
+
+# Angular
+angular.json
+*.ngfactory.ts
+*.ngstyle.ts
+
+# React
+build/
+public/build/
+public/dist/
+
+# Static Site Generators
+_site/
+.jekyll-cache/
+.jekyll-metadata
+
+# ===================================================================
+# 日志和数据库
+# ===================================================================
+*.log
+logs
+*.sql
+*.sqlite
+*.sqlite3
+*.db
+
+# ===================================================================
+# 环境变量文件（敏感信息）
+# ===================================================================
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.example
+
+# ===================================================================
+# 自定义：可执行文件或临时输出（根据项目调整）
+# ===================================================================
+*.tmp
+*.temp
+temp/
+output/
+results/
+
+# ===================================================================
+# 其他常见忽略项
+# ===================================================================
+# 编译器缓存
+.cache/
+
+# 下载的依赖
+external/
+lib/
+
+# 本地配置
+config.local.*
+*.local
+
+# IDE 自动备份
+*.orig
+*.bk
+*.backup
+
+# 压缩包（除非必要）
+*.zip
+*.tar
+*.gz
+*.7z
+*.rar
+*.bz2
+
+# 证书/密钥
+*.pem
+*.key
+*.crt
+*.der
+*.pfx
+*.p12
+*.jks
+keystore.*
+
+
+# ===================================================================
+# Microsoft Office 文件相关
+# ===================================================================
+# Word 临时文件
+~$*.docx
+~$*.doc
+~$*.dotx
+~$*.dot
+
+# Excel 临时文件
+~$*.xlsx
+~$*.xls
+~$*.xlsm
+~$*.xlsb
+~$*.xltm
+~$*.xltx
+
+# PowerPoint 临时文件
+~$*.pptx
+~$*.ppt
+~$*.potx
+~$*.pot
+~$*.ppsx
+~$*.pps
+
+# OneNote
+*.onepkg
+*.onebin
+
+# Office 缓存和临时文件
+*.tmp
+*.temp
+*.un~  # Word 临时备份
+*.wbk   # Word 备份文件
+*.bak
+.DS_Store?  # macOS 上 Office 可能生成
+._~$*.docx
+._~$*.xlsx
+._~$*.pptx
+
+# Office 自动保存文件
+AutoRecovery save of *.asv
+~ASV*.tmp
+
+# ===================================================================
+# LibreOffice / OpenOffice 文件
+# ===================================================================
+*.ods~
+*.odt~
+*.odp~
+*.odg~
+*.odf~
+*.odb~
+*.odi~
+*.odm~
+
+# LibreOffice 自动保存
+backup/
+unotmp*/
+*.backup
+*.tmp
+*.temp
+
+# 配置缓存
+.swo
+.swn
+lock/
+.sbk
