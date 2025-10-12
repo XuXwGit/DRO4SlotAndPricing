@@ -1,24 +1,19 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
-
-
-from src.entity.port import Port
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 @dataclass
 class Node:
     """
     网络节点类，表示运输网络中的一个节点。
-    对应Java类: multi.network.Node
     """
-    
-    def __init__(self, 
-                 id: int = 0, 
-                 route: int = 0, 
-                 call: int = 0, 
-                 port_string: str = "", 
-                 round_trip: int = 0, 
-                 time: int = 0, 
-                 port: Optional[Port] = None):
+    def __init__(self,
+                 id: int = 0,
+                 route: int = 0,
+                 call: int = 0,
+                 port_string: str = "",
+                 round_trip: int = 0,
+                 time: int = 0,
+                 port= None):
         """
         初始化节点对象
         
@@ -31,14 +26,13 @@ class Node:
             time: 时间点，默认为0
             port: 关联的港口对象，默认为None
         """
-        # 基本属性，对应Java类中的字段
-        self.port_string = port_string  # 对应Java: private String portString
-        self.node_id = id  # 对应Java: private int nodeID
-        self.route = route  # 对应Java: private int route
-        self.call = call  # 对应Java: private int call
-        self.round_trip = round_trip  # 对应Java: private int roundTrip
-        self.time = time  # 对应Java: private int time
-        self.port = port  # 对应Java: private Port port
+        self.port_string = port_string  
+        self.node_id = id  
+        self.route = route  
+        self.call = call  
+        self.round_trip = round_trip  
+        self.time = time  
+        self.port = port  
         
         # 附加属性（Python实现中用于网络构建）
         self.incoming_arcs: List[Any] = []  # 入边列表

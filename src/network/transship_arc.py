@@ -11,7 +11,6 @@ from .node import Node
 class TransshipArc(Arc):
     """
     转运弧类，继承自Arc
-    对应Java类: multi.network.TransshipArc
     """
     
     def __init__(self, 
@@ -35,11 +34,11 @@ class TransshipArc(Arc):
         super().__init__(id, origin_node, destination_node)
         
         # 转运弧特有属性
-        self.transship_arc_id = id  # 对应Java: private int transshipArcID
-        self.port = port  # 对应Java: private String port
-        self.transship_time = transship_time  # 对应Java: private int transshipTime
-        self.from_route = from_route  # 对应Java: private int fromRoute
-        self.to_route = to_route  # 对应Java: private int toRoute
+        self.transship_arc_id = id  
+        self.port = port  
+        self.transship_time = transship_time  
+        self.from_route = from_route  
+        self.to_route = to_route  
         
     def __str__(self):
         """

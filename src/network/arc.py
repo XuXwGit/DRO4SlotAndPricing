@@ -9,7 +9,6 @@ from network.node import Node  # 移除顶部import，延迟导入
 class Arc:
     """
     弧/边类，表示网络中的连接
-    对应Java类: multi.network.Arc
     """
     
     def __init__(self, 
@@ -27,20 +26,22 @@ class Arc:
         # 延迟导入，避免循环依赖
         # from multi.network.node import Node
         # 基本属性
-        self.arc_id = arc_id  # 对应Java: private int arcID
-        self.origin_node_id = origin_node.node_id  # 对应Java: private int originNodeID
-        self.destination_node_id = destination_node.node_id  # 对应Java: private int destinationNodeID
-        self.origin_port = origin_node.port  # 对应Java: private String originPort
-        self.destination_port = destination_node.port  # 对应Java: private String destinationPort
-        self.origin_node = origin_node  # 对应Java: private Node originNode
-        self.destination_node = destination_node  # 对应Java: private Node destinationNode
-        self.origin_call = origin_node.call  # 对应Java: private int originCall
-        self.destination_call = destination_node.call  # 对应Java: private int destinationCall
-        self.origin_time = origin_node.time  # 对应Java: private int originTime
-        self.destination_time = destination_node.time  # 对应Java: private int destinationTime
+        self.arc_id = arc_id
+        self.id = arc_id
+        self.capacity = 5000
+        self.origin_node_id = origin_node.node_id
+        self.destination_node_id = destination_node.node_id
+        self.origin_port = origin_node.port
+        self.destination_port = destination_node.port 
+        self.origin_node = origin_node
+        self.destination_node = destination_node  
+        self.origin_call = origin_node.call  
+        self.destination_call = destination_node.call  
+        self.origin_time = origin_node.time  
+        self.destination_time = destination_node.time
         
         # 弧类型："Traveling Arc" or "Transship Arc"
-        self.arc_type = ""  # 对应Java: private String arcType
+        self.arc_type = ""  
         
         # 若节点不为空，将弧添加到节点的边集合中
         if origin_node:
