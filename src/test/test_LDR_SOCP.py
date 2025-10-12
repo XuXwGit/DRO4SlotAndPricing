@@ -35,7 +35,7 @@ if __name__ == "__main__":
         )
 
     model_params = generate_feasible_test_case(
-            num_paths=5,
+            num_paths=10,
             num_periods=10,
             num_prices=10,
             uncertainty_dim=1,

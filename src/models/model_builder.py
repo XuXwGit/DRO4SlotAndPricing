@@ -51,7 +51,7 @@ class ModelBuilder:
         self.info = info
         self.obj_val = 0
         self.solutions = {}
-        self.INF = float('inf') # 100000000
+        self.INF =  10000000 # 100000000         #float('inf')
         if solver == "gurobi":
             # self.INF = GRB.INFINITY
             self.model = Model(info)

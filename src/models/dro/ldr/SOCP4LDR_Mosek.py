@@ -461,8 +461,19 @@ class SOCP4LDR_Mosek(ModelBuilder):
 
 
     def solve(self, time_limit: float = 300.0, rel_gap: float = 1e-3, verbose: bool = True):
+        # 设置求解参数
         self.model.putdouparam(mosek.dparam.intpnt_co_tol_rel_gap, rel_gap)
         self.model.putdouparam(mosek.dparam.optimizer_max_time, time_limit)
+
+        if verbose:
+            # 启用日志输出到终端
+            def streamprinter(text):
+                sys.stdout.write(text)
+                sys.stdout.flush()
+
+            self.model.set_Stream(mosek.streamtype.log, streamprinter)
+
+        # 开始求解
         self.model.optimize()
 
         if verbose:
