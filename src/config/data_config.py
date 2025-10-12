@@ -1,9 +1,9 @@
 # ================== 数据库字段名 -> 标准字段名映射 ==================
-from config.config import DefaultSetting
+from config.config import Config
 
 
 DB_COLUMN_MAPS = {
-    DefaultSetting.FILE_TABLE_MAP[DefaultSetting.PORTS_FILENAME]: {
+    Config.FILE_TABLE_MAP[Config.PORTS_FILENAME]: {
         'id': 'PortID',
         'port_id': 'PortID',
         'port': 'Port',
@@ -12,7 +12,7 @@ DB_COLUMN_MAPS = {
         'region': 'Region',
         'group': 'Group',
     },
-    DefaultSetting.FILE_TABLE_MAP[DefaultSetting.ROUTES_FILENAME]: {
+    Config.FILE_TABLE_MAP[Config.ROUTES_FILENAME]: {
         'id': 'ShippingRouteID',
         'cycle_time': 'CycleTime',
         'num_round_trips': 'NumRoundTrips',
@@ -24,7 +24,7 @@ DB_COLUMN_MAPS = {
         'times': 'Time',
         'ports': 'Ports',
     },
-    DefaultSetting.FILE_TABLE_MAP[DefaultSetting.VESSELS_FILENAME]: {
+    Config.FILE_TABLE_MAP[Config.VESSELS_FILENAME]: {
         'id': 'VesselID',
         'vessel_id': 'VesselID',
         'capacity': 'Capacity',
@@ -32,7 +32,7 @@ DB_COLUMN_MAPS = {
         'route_id': 'RouteID',
         'max_num': 'MaxNum',
     },
-    DefaultSetting.FILE_TABLE_MAP[DefaultSetting.NODES_FILENAME]: {
+    Config.FILE_TABLE_MAP[Config.NODES_FILENAME]: {
         'id': 'ID',
         'node_id': 'ID',
         'route': 'Route',
@@ -41,7 +41,7 @@ DB_COLUMN_MAPS = {
         'round_trip': 'RoundTrip',
         'time': 'Time',
     },
-    DefaultSetting.FILE_TABLE_MAP[DefaultSetting.TRAVELING_ARCS_FILENAME]: {
+    Config.FILE_TABLE_MAP[Config.TRAVELING_ARCS_FILENAME]: {
         'id': 'TravelingArcID',
         'traveling_arc_id': 'TravelingArcID',
         'route': 'Route',
@@ -56,7 +56,7 @@ DB_COLUMN_MAPS = {
         'destination_port': 'DestinationPort',
         'destination_time': 'DestinationTime',
     },
-    DefaultSetting.FILE_TABLE_MAP[DefaultSetting.TRANSSHIP_ARCS_FILENAME]: {
+    Config.FILE_TABLE_MAP[Config.TRANSSHIP_ARCS_FILENAME]: {
         'id': 'TransshipArcID',
         'transship_arc_id': 'TransshipArcID',
         'port': 'Port',
@@ -68,7 +68,7 @@ DB_COLUMN_MAPS = {
         'from_route': 'FromRoute',
         'to_route': 'ToRoute',
     },
-    DefaultSetting.FILE_TABLE_MAP[DefaultSetting.PATHS_FILENAME]: {
+    Config.FILE_TABLE_MAP[Config.PATHS_FILENAME]: {
         'id': 'PathID',
         'container_path_id': 'ContainerPathID',
         'origin_port': 'OriginPort',
@@ -83,7 +83,7 @@ DB_COLUMN_MAPS = {
         'arcs_length': 'ArcsLength',
         'arcs_id': 'ArcsID',
     },
-    DefaultSetting.FILE_TABLE_MAP[DefaultSetting.LADEN_PATHS_FILENAME]: {
+    Config.FILE_TABLE_MAP[Config.LADEN_PATHS_FILENAME]: {
         'request_id': 'RequestID',
         'origin_port': 'OriginPort',
         'origin_time': 'OriginTime',
@@ -98,14 +98,14 @@ DB_COLUMN_MAPS = {
         'port_path': 'PortPath',
         'arc_ids': 'ArcIDs',
     },
-    DefaultSetting.FILE_TABLE_MAP[DefaultSetting.EMPTY_PATHS_FILENAME]: {
+    Config.FILE_TABLE_MAP[Config.EMPTY_PATHS_FILENAME]: {
         'request_id': 'RequestID',
         'origin_port': 'OriginPort',
         'origin_time': 'OriginTime',
         'num_of_empty_path': 'NumOfEmptyPath',
         'path_ids': 'PathIDs',
     },
-    DefaultSetting.FILE_TABLE_MAP[DefaultSetting.REQUESTS_FILENAME]: {
+    Config.FILE_TABLE_MAP[Config.REQUESTS_FILENAME]: {
         'id': 'RequestID',
         'request_id': 'RequestID',
         'origin_port': 'OriginPort',
@@ -118,7 +118,7 @@ DB_COLUMN_MAPS = {
         'empty_paths': 'EmptyPaths',
         'number_of_empty_path': 'NumberOfEmptyPath',
     },
-    DefaultSetting.FILE_TABLE_MAP[DefaultSetting.DEMAND_RANGE_FILENAME]: {
+    Config.FILE_TABLE_MAP[Config.DEMAND_RANGE_FILENAME]: {
         'origin_region': 'OriginRegion',
         'destination_region': 'DestinationRegion',
         'demand_lower_bound': 'DemandLowerBound',
@@ -126,7 +126,7 @@ DB_COLUMN_MAPS = {
         'freight_lower_bound': 'FreightLowerBound',
         'freight_upper_bound': 'FreightUpperBound',
     },
-    DefaultSetting.FILE_TABLE_MAP[DefaultSetting.VESSEL_PATHS_FILENAME]: {
+    Config.FILE_TABLE_MAP[Config.VESSEL_PATHS_FILENAME]: {
         'id': 'VesselPathID',
         'vessel_path_id': 'VesselPathID',
         'vessel_route_id': 'ShippingRouteID',
