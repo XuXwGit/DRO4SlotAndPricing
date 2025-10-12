@@ -1,6 +1,7 @@
 """
 使用Mosek 建模 重构后的SOCP模型，由Qwen转换 LDR_based_SOCP.py 得到
 """
+import logging
 import numpy as np
 import sys
 from typing import Dict, Any, List
@@ -12,7 +13,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(o
 print(PROJECT_ROOT)
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.models.model_builder import ModelBuilder
+from src.models.model_builder import ModelBuilder, timeit_if_debug
 from src.utils.model_params import generate_feasible_test_case
 
 class SOCP4LDR_Mosek(ModelBuilder):
@@ -41,6 +42,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
     def _get_var(self, name: str) -> int:
         return self._var_index[name]
 
+    @timeit_if_debug
     def build_model(self):
         """构建 MOSEK Task 模型"""
         self.model = mosek.Task()
@@ -49,6 +51,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
         self.set_objective()
         self.add_constraints()
 
+    @timeit_if_debug
     def create_variables(self):
         I1 = self.I1
         # Stage I
@@ -91,13 +94,16 @@ class SOCP4LDR_Mosek(ModelBuilder):
         for q in self.Q_list:
             self.pi_idx[q] = [self._add_var(f"pi_{q}_{j}") for j in range(3*I1+3)]
 
-        num_vars = self._next_var
-        self.model.appendvars(num_vars)
+        self.num_vars = self._next_var
+        self.model.appendvars(self.num_vars)
 
         # 变量上下界
         self.set_variable_bounds()
 
     def set_variable_bounds(self):
+    # 设置所有变量为自由变量（lb=-inf, ub=+inf）
+        for i in range(self.num_vars):
+            self.model.putvarbound(i, mosek.boundkey.fr, -0.0, +0.0)
         # (26): t_k <= 0, l <= 0
         for k in range(self.I1):
             self.model.putvarbound(self.t_idx[k], mosek.boundkey.up, -0.0, 0.0)
@@ -107,6 +113,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
             self.model.putvarbound(self.X_idx[phi], mosek.boundkey.lo, 0.0, +0.0)
             self.model.putvarbound(self.Y_idx[phi], mosek.boundkey.lo, 0.0, +0.0)
 
+    @timeit_if_debug
 
     def set_objective(self):
 
@@ -128,6 +135,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
         self.model.putclist(range(self._next_var), c)
         self.model.putobjsense(mosek.objsense.maximize)
 
+    @timeit_if_debug
     def add_constraints(self):
         # # 1) 第一阶段约束
         self.add_first_stage_constraints()
@@ -479,6 +487,8 @@ class SOCP4LDR_Mosek(ModelBuilder):
         if verbose:
             self.model.solutionsummary(mosek.streamtype.log)
 
+        self.print_model_status()
+
     def get_solution(self):
         """提取解"""
         sol = {}
@@ -490,17 +500,64 @@ class SOCP4LDR_Mosek(ModelBuilder):
         sol['obj'] = self.model.getprimalobj(mosek.soltype.itr)
         return sol
 
+    def get_status(self):
+        """
+        获取 MOSEK 模型求解状态
+        """
+        try:
+            # 获取问题状态和解状态（使用 interior-point solution）
+            prosta = self.model.getprosta(mosek.soltype.itr)
+            solsta = self.model.getsolsta(mosek.soltype.itr)
+        except mosek.Error:
+            return "ERROR"
 
-if __name__ == "__main__":
-    model_params = generate_feasible_test_case(
-            num_paths=10,
-            num_periods=10,
-            num_prices=10,
-            uncertainty_dim=1,
-            seed=42
-        )
-    model = SOCP4LDR_Mosek(model_params, debug=True)
-    model.build_model()
-    model.solve(time_limit=600.0)
-    solution = model.get_solution()
-    print("Optimal X:", solution['X'])
+        if solsta == mosek.solsta.optimal:
+            return "OPTIMAL"
+        elif prosta == mosek.prosta.prim_infeas:
+            return "INFEASIBLE"
+        elif prosta == mosek.prosta.dual_infeas:
+            return "UNBOUNDED"
+        elif solsta in [mosek.solsta.near_optimal, mosek.solsta.unknown]:
+            # 可能是时间限制、数值问题等
+            # 检查是否达到时间限制（需用户自行记录）
+            return "TIME_LIMIT_OR_NEAR_OPTIMAL"
+        else:
+            return f"OTHER (prosta={prosta}, solsta={solsta})"
+
+    def print_model_status(self):
+        """
+        打印 MOSEK 模型状态，并在不可行时导出 .ptf 文件（MOSEK 不支持 .ilp）
+        """
+        try:
+            prosta = self.model.getprosta(mosek.soltype.itr)
+            solsta = self.model.getsolsta(mosek.soltype.itr)
+        except mosek.Error as e:
+            logging.error(f"Failed to get solution status: {e}")
+            return
+
+        if solsta == mosek.solsta.optimal:
+            return  # 正常，无需处理
+
+        file_name = self.info
+
+        if prosta == mosek.prosta.prim_infeas:
+            # 原始不可行：导出问题文件用于调试
+            self.model.writedata(file_name + '_infeasible.ptf')
+            self.model.writedata(file_name + '.ptf')
+            raise Exception("模型无可行解 (Primal Infeasible)")
+
+        elif prosta == mosek.prosta.dual_infeas:
+            # 对偶不可行 → 通常意味着原始问题无界
+            self.model.writedata(file_name + '_unbounded.ptf')
+            logging.warning("模型无界 (Dual Infeasible)")
+
+        elif solsta in [mosek.solsta.near_optimal, mosek.solsta.unknown]:
+            # 可能是时间限制或数值问题
+            try:
+                obj_val = self.model.getprimalobj(mosek.soltype.itr)
+                logging.warning(f"求解未完成（可能超时），当前目标值：{obj_val}")
+            except:
+                logging.warning("求解未完成，无有效目标值")
+
+        else:
+            logging.warning(f"其他状态：prosta={prosta}, solsta={solsta}")

@@ -51,7 +51,7 @@ class ModelBuilder:
         self.info = info
         self.obj_val = 0
         self.solutions = {}
-        self.INF =  10000000 # 100000000         #float('inf')
+        self.INF =  100000000 # 100000000         #float('inf')
         if solver == "gurobi":
             # self.INF = GRB.INFINITY
             self.model = Model(info)
@@ -239,7 +239,22 @@ class ModelBuilder:
         print(E)
         print("--- END DEBUG ---\n")
 
+    @timeit_if_debug
+    def build_model(self):
+        """ 构建模型 """
+        try:
+            self.set_parameters()
 
+            self.create_variables()
+
+            self.set_objective()
+
+            self.add_constraints()
+
+            self.print_model_info()
+        except Exception as e:
+            logging.error(f"构建模型时发生错误：{e}")
+            raise e
 
     """
     =========================================
@@ -269,79 +284,22 @@ class ModelBuilder:
         """ 提取解 """
         raise NotImplementedError("子类必须实现此方法")
 
-    @timeit_if_debug
-    def build_model(self):
-        """ 构建模型 """
-        try:
-            self.set_parameters()
+    def get_status(self):
+        raise NotImplementedError("子类必须实现此方法")
 
-            self.create_variables()
-
-            self.set_objective()
-
-            self.add_constraints()
-
-            self.print_model_info()
-        except Exception as e:
-            logging.error(f"构建模型时发生错误：{e}")
-            raise e
+    def print_model_status(self):
+        """ 打印模型状态 """
+        raise NotImplementedError("子类必须实现此方法")
 
     def print_model_info(self):
         """
-        打印 Gurobi 模型的基本信息：变量数量和约束数量。
-
-        参数:
-            model (gurobipy.Model): 已构建的 Gurobi 模型对象。
+        打印 模型的基本信息：变量数量和约束数量。
         """
-        num_vars = self.model.NumVars
-        num_constrs =self.model.NumConstrs
+        raise NotImplementedError("子类必须实现此方法")
 
-        print(f"模型信息:")
-        print(f"  - 变量数量: {num_vars}")
-        print(f"  - 约束数量: {num_constrs}")
-
-
+    @timeit_if_debug
     def solve(self):
         """ 求解模型 """
         self.model.optimize()
         self.print_model_status()
         self.extract_solution()
-
-
-    def get_status(self):
-        if (self.model.status == GRB.OPTIMAL):
-            return "OPTIMAL"
-        elif self.model.status == GRB.INFEASIBLE:
-            return "INFEASIBLE"
-        elif self.model.status == GRB.UNBOUNDED:
-            return  "UNBOUNDED"
-        elif self.model.status == GRB.TIME_LIMIT:
-            return  "TIME_LIMIT"
-        else:
-            return "Other"
-
-    def print_model_status(self):
-        """ 打印模型状态 """
-        if(self.model.status != GRB.OPTIMAL):
-            if self.model.status == GRB.INFEASIBLE:
-                self.model.computeIIS()
-                file_name = self.info
-                self.model.write(file_name + '_infeasible'+ '.ilp')
-                self.model.write(file_name+ '.lp')
-                raise Exception("模型无可行解")
-            elif self.model.status == GRB.UNBOUNDED:
-                file_name = 'InnerMP'
-                self.model.write(file_name+ '.lp')
-                logging.warning(f"模型无界，当前目标值：{self.model.ObjVal}") # type: ignore
-            elif self.model.SolCount >= 1:
-                logging.warning(f"存在可行解，当前目标值：{self.model.ObjVal}") # type: ignore
-            elif self.model.status == GRB.TIME_LIMIT:
-                logging.warning(f"达到时间限制，当前目标值：{self.model.ObjVal}") # type: ignore
-            elif self.model.status == GRB.INF_OR_UNBD:
-                self.model.computeIIS()
-                file_name = self.info
-                self.model.write(file_name + '_infeas_or_Unbound'+ '.ilp')
-                self.model.write(file_name+ '.lp')
-                logging.warning(f"模型无界或不可行，当前目标值：{self.model.ObjVal}") # type: ignore
-            else:
-                logging.warning(f"其他状态码：{self.model.status}") # type: ignore

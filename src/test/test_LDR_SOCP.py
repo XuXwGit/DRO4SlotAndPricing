@@ -1,4 +1,6 @@
+import logging
 from typing import Any, Dict
+from venv import logger
 import numpy as np
 import os
 import sys
@@ -25,6 +27,7 @@ if __name__ == "__main__":
         data.generate_demand_and_price()
         model_params = construct_model_params(data_manager=data)
     except Exception as e:
+        logging.debug(f"读取案例数据 or 生成模型参数 失败: {e}")
         # 兜底：生成一个测试用例
         model_params = generate_feasible_test_case(
             num_paths=10,
@@ -35,12 +38,13 @@ if __name__ == "__main__":
         )
 
     model_params = generate_feasible_test_case(
-            num_paths=10,
-            num_periods=10,
-            num_prices=10,
+            num_paths=1,
+            num_periods=2,
+            num_prices=1,
             uncertainty_dim=1,
             seed=42  # 固定种子以复现结果
         )
+
 
     # socp = SOCP4LDR(model_params=model_params)
     socp = SOCP4LDR_Mosek(model_params=model_params)
@@ -49,6 +53,7 @@ if __name__ == "__main__":
 
     # 求解
     socp.solve()
+    print(socp.get_status())
 
     # check feasibility
     # run_all_validations(socp.get_solution(), model_params, socp.get_pi_solution())

@@ -2,6 +2,7 @@ import numpy as np
 import os
 import sys
 import gurobipy as gp
+from gurobipy import GRB
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 print(PROJECT_ROOT)
@@ -104,7 +105,7 @@ class SOCP4LDR(ModelBuilder):
             # addVars returns a tupledict indexed by integers 0..(2I1+1)
             self.pi[q] = self.model.addVars(3 * self.I1 + 3, lb=-self.INF , ub=self.INF , vtype=VType.CONTINUOUS, name=f"pi_{q}".replace(" ", "_"))
 
-        # alpha, gamma, delta — **作为表达式容器**（LinExpr），不再建成 Vars
+        # alpha, gamma, delta — **作为表达式容器**（LinExpr）
         self.alpha0 = {}   # alpha0[q] will be gp.LinExpr or Var-involving expr
         self.alpha_z = {}  # alpha_z[(q,i)]
         self.alpha_u = {}  # alpha_u[(q,k)]
@@ -614,3 +615,55 @@ class SOCP4LDR(ModelBuilder):
             print("Solution:")
             for key, value in solutions.items():
                 print(f"{key}: {value}")
+
+    def print_model_info(self):
+        """
+        打印 Gurobi 模型的基本信息：变量数量和约束数量。
+
+        参数:
+            model (gurobipy.Model): 已构建的 Gurobi 模型对象。
+        """
+        num_vars = self.model.NumVars
+        num_constrs =self.model.NumConstrs
+
+        print(f"模型信息:")
+        print(f"  - 变量数量: {num_vars}")
+        print(f"  - 约束数量: {num_constrs}")
+
+    def get_status(self):
+        if (self.model.status == gp.GRB.OPTIMAL):
+            return "OPTIMAL"
+        elif self.model.status == GRB.INFEASIBLE:
+            return "INFEASIBLE"
+        elif self.model.status == GRB.UNBOUNDED:
+            return  "UNBOUNDED"
+        elif self.model.status == GRB.TIME_LIMIT:
+            return  "TIME_LIMIT"
+        else:
+            return "Other"
+
+    def print_model_status(self):
+        """ 打印模型状态 """
+        if(self.model.status != GRB.OPTIMAL):
+            if self.model.status == GRB.INFEASIBLE:
+                self.model.computeIIS()
+                file_name = self.info
+                self.model.write(file_name + '_infeasible'+ '.ilp')
+                self.model.write(file_name+ '.lp')
+                raise Exception("模型无可行解")
+            elif self.model.status == GRB.UNBOUNDED:
+                file_name = 'InnerMP'
+                self.model.write(file_name+ '.lp')
+                logging.warning(f"模型无界，当前目标值：{self.model.ObjVal}") # type: ignore
+            elif self.model.SolCount >= 1:
+                logging.warning(f"存在可行解，当前目标值：{self.model.ObjVal}") # type: ignore
+            elif self.model.status == GRB.TIME_LIMIT:
+                logging.warning(f"达到时间限制，当前目标值：{self.model.ObjVal}") # type: ignore
+            elif self.model.status == GRB.INF_OR_UNBD:
+                self.model.computeIIS()
+                file_name = self.info
+                self.model.write(file_name + '_infeas_or_Unbound'+ '.ilp')
+                self.model.write(file_name+ '.lp')
+                logging.warning(f"模型无界或不可行，当前目标值：{self.model.ObjVal}") # type: ignore
+            else:
+                logging.warning(f"其他状态码：{self.model.status}") # type: ignore
