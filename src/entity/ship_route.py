@@ -1,256 +1,249 @@
-from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from .port import Port
 from .vessel_path import VesselPath
 from .vessel_type import VesselType
 
-@dataclass
+
 class ShipRoute:
     """
     航线类
     
     存储航线相关的属性和信息
-    
-    属性:
-        ship_route_id: 航线ID
-        cycle_time: 周期时间
-        num_round_trips: 往返次数
-        number_of_ports: 港口数量
-        ports: 港口列表
-        port_calls: 港口停靠映射(停靠索引->港口)
-        number_of_call: 停靠次数
-        ports_of_call: 停靠港口列表
-        time_points_of_call: 停靠时间点列表
-        num_vessel_paths: 船舶路径数量
-        vessel_paths: 船舶路径列表
-        vessel_type: 船舶类型
-        fleet: 船队映射(轮次索引->船舶类型)
-        available_vessels: 可用船舶映射(船舶ID->船舶类型)
     """
-    def __init__(self, 
-                 ship_route_id: int, 
-                 cycle_time: int, 
-                 number_of_ports: int,      
-                 number_of_call: int,
-                 ports_of_call: List[str], 
-                 time_points_of_call: List[int],
-                 ):
-        """对应Java: public ShipRoute()"""
-        # 基本属性
-        self._ship_route_id: int = ship_route_id  # 对应Java: private int shipRouteID
-        self._cycle_time: int = cycle_time  # 对应Java: private int cycleTime
+
+    def __init__(
+        self,
+        ship_route_id: int,
+        cycle_time: int,
+        number_of_ports: int,
+        number_of_call: int,
+        ports_of_call: List[str],          # 保留用于显示/日志
+        time_points_of_call: List[int],
+        port_objects: List[Port],          # ← 新增：实际 Port 对象列表
+    ):
+        self._ship_route_id = ship_route_id
+        self._cycle_time = cycle_time
+        self._number_of_ports = number_of_ports
+        self._number_of_call = number_of_call
+        self._ports_of_call = ports_of_call.copy()
+        self._time_points_of_call = time_points_of_call.copy()
         
-        # 往返和港口信息
-        self._num_round_trips: int = 0  # 对应Java: private int numRoundTrips
-        self._number_of_ports: int = number_of_ports  # 对应Java: private int numberOfPorts
-        self._ports: List[str] = ports_of_call  # 对应Java: private String[] ports
-        
-        # 港口挂靠信息
-        # key: port call index, value: Port
-        self._port_calls: Dict[int, Port] = {}  # 对应Java: private Map<Integer, Port> portCalls
-        self._number_of_call: int = number_of_call  # 对应Java: private int numberOfCall
-        self._ports_of_call: List[str] = ports_of_call  # 对应Java: private String[] portsOfCall
-        self._time_points_of_call: List[int] = time_points_of_call  # 对应Java: private int[] timePointsOfCall
-        
+        # 关键：使用传入的 Port 对象
+        self._ports = port_objects
+        self._port_calls = {i: port for i, port in enumerate(port_objects)}
+    
+        # 将港口名称转换为 Port 对象，并构建 port_calls 映射
+        self._ports: List[Port] = [Port() for name in ports_of_call]
+        self._port_calls: Dict[int, Port] = {
+            i: Port() for i, name in enumerate(ports_of_call)
+        }
+
         # 船舶路径信息
-        # key: Rotation index in the planning horizon, value: VesselPath
-        self._num_vessel_paths: int = 0  # 对应Java: private int numVesselPaths
-        self._vessel_paths: List[VesselPath] = []  # 对应Java: private List<VesselPath> vesselPaths
-        
+        self._num_vessel_paths: int = 0
+        self._vessel_paths: List[VesselPath] = []
+
         # 船型分配
-        self._vessel_type: Optional[VesselType] = None  # 对应Java: private VesselType vesselType
-        
-        # key: Rotation index in the planning horizon, value: VesselType Object
-        self._fleet: Dict[int, VesselType] = {}  # 对应Java: private Map<Integer, VesselType> fleet
-        
-        # key: vesselID, value: VesselType Object
-        self._available_vessels: Dict[int, VesselType] = {}  # 对应Java: private Map<Integer, VesselType> availableVessels
-    
-    def get_call_index_of_port(self, port: str) -> int:
+        self._vessel_type: Optional[VesselType] = None
+        self._fleet: Dict[int, VesselType] = {}
+        self._available_vessels: Dict[int, VesselType] = {}
+
+    def get_call_index_of_port(self, port_name: str) -> int:
         """
-        获取港口的挂靠索引
-        对应Java: public int getCallIndexOfPort(String port)
+        获取港口名称在 ports_of_call 中第一次出现的挂靠索引。
+
+        Args:
+            port_name (str): 港口名称
+
+        Returns:
+            int: 第一次出现的索引，若未找到则返回 -1
         """
-        # 对应Java: for (int p = 0; p < this.numberOfCall - 1; p++)
-        for p in range(self._number_of_call - 1):
-            # 对应Java: if(port.equals(this.getPortsOfCall()[p]))
-            if port == self._ports_of_call[p]:
-                # 对应Java: return p;
-                return p
-        # 对应Java: return -1;
-        return -1
-    
-    # Getter和Setter方法
+        try:
+            return self._ports_of_call.index(port_name)
+        except ValueError:
+            return -1
+
+    def get_all_call_indices_of_port(self, port_name: str) -> List[int]:
+        """
+        获取港口名称在 ports_of_call 中所有出现的挂靠索引。
+
+        Args:
+            port_name (str): 港口名称
+
+        Returns:
+            List[int]: 所有匹配的索引列表
+        """
+        return [i for i, name in enumerate(self._ports_of_call) if name == port_name]
+
+    # ========== 属性访问器 ==========
+
     @property
     def id(self) -> int:
-        """对应Java: getId()"""
+        """航线ID（别名）"""
         return self._ship_route_id
 
     @id.setter
     def id(self, value: int):
-        """对应Java: setId(int id)"""
         self._ship_route_id = value
 
     @property
     def ship_route_id(self) -> int:
-        """对应Java: getShipRouteID()"""
+        """航线ID"""
         return self._ship_route_id
-    
+
     @ship_route_id.setter
     def ship_route_id(self, value: int):
-        """对应Java: setShipRouteID(int shipRouteID)"""
         self._ship_route_id = value
-    
+
     @property
     def route_id(self) -> int:
-        """对应Java: getRouteID()"""
+        """航线ID（别名）"""
         return self._ship_route_id
-    
+
     @route_id.setter
     def route_id(self, value: int):
-        """对应Java: setRouteID(int routeID)"""
         self._ship_route_id = value
 
     @property
     def cycle_time(self) -> int:
-        """对应Java: getCycleTime()"""
+        """周期时间（单位：小时或天，依上下文而定）"""
         return self._cycle_time
-    
+
     @cycle_time.setter
     def cycle_time(self, value: int):
-        """对应Java: setCycleTime(int cycleTime)"""
         self._cycle_time = value
-    
+
     @property
     def num_round_trips(self) -> int:
-        """对应Java: getNumRoundTrips()"""
+        """往返次数"""
         return self._num_round_trips
-    
+
     @num_round_trips.setter
     def num_round_trips(self, value: int):
-        """对应Java: setNumRoundTrips(int numRoundTrips)"""
         self._num_round_trips = value
-    
+
     @property
     def number_of_ports(self) -> int:
-        """对应Java: getNumberOfPorts()"""
+        """港口数量（不重复？或指航线设计中的港口数）"""
         return self._number_of_ports
-    
+
     @number_of_ports.setter
     def number_of_ports(self, value: int):
-        """对应Java: setNumberOfPorts(int numberOfPorts)"""
         self._number_of_ports = value
-    
+
     @property
-    def ports(self) -> List[str]:
-        """对应Java: getPorts()"""
+    def ports(self) -> List[Port]:
+        """港口对象列表（由 ports_of_call 构建）"""
         return self._ports
-    
+
     @ports.setter
-    def ports(self, value: List[str]):
-        """对应Java: setPorts(String[] ports)"""
+    def ports(self, value: List[Port]):
         self._ports = value
-    
+
     @property
     def port_calls(self) -> Dict[int, Port]:
-        """对应Java: getPortCalls()"""
+        """挂靠索引到 Port 对象的映射"""
         return self._port_calls
-    
+
     @port_calls.setter
     def port_calls(self, value: Dict[int, Port]):
-        """对应Java: setPortCalls(Map<Integer, Port> portCalls)"""
         self._port_calls = value
-    
+
     @property
     def number_of_call(self) -> int:
-        """对应Java: getNumberOfCall()"""
+        """总挂靠次数（包括重复港口）"""
         return self._number_of_call
-    
+
     @number_of_call.setter
     def number_of_call(self, value: int):
-        """对应Java: setNumberOfCall(int numberOfCall)"""
         self._number_of_call = value
-    
+
     @property
     def ports_of_call(self) -> List[str]:
-        """对应Java: getPortsOfCall()"""
+        """挂靠港口名称列表（按顺序，可重复）"""
         return self._ports_of_call
-    
+
     @ports_of_call.setter
     def ports_of_call(self, value: List[str]):
-        """对应Java: setPortsOfCall(String[] portsOfCall)"""
-        self._ports_of_call = value
-    
+        self._ports_of_call = value.copy()
+        # 同步更新 ports 和 port_calls
+        self._ports = [Port() for name in value]
+        self._port_calls = {i: Port() for i, name in enumerate(value)}
+        self._number_of_call = len(value)
+
     @property
     def time_points_of_call(self) -> List[int]:
-        """对应Java: getTimePointsOfCall()"""
+        """各挂靠点的时间点（相对时间）"""
         return self._time_points_of_call
-    
+
     @time_points_of_call.setter
     def time_points_of_call(self, value: List[int]):
-        """对应Java: setTimePointsOfCall(int[] timePointsOfCall)"""
-        self._time_points_of_call = value
-    
+        self._time_points_of_call = value.copy()
+
     @property
     def num_vessel_paths(self) -> int:
-        """对应Java: getNumVesselPaths()"""
+        """船舶路径数量"""
         return self._num_vessel_paths
-    
+
     @num_vessel_paths.setter
     def num_vessel_paths(self, value: int):
-        """对应Java: setNumVesselPaths(int numVesselPaths)"""
         self._num_vessel_paths = value
-    
+
     @property
     def vessel_paths(self) -> List[VesselPath]:
-        """对应Java: getVesselPaths()"""
+        """船舶路径列表"""
         return self._vessel_paths
-    
+
     @vessel_paths.setter
     def vessel_paths(self, value: List[VesselPath]):
-        """对应Java: setVesselPaths(List<VesselPath> vesselPaths)"""
         self._vessel_paths = value
-    
+        self._num_vessel_paths = len(value)
+
     @property
     def vessel_type(self) -> Optional[VesselType]:
-        """对应Java: getVesselType()"""
+        """默认船舶类型"""
         return self._vessel_type
-    
+
     @vessel_type.setter
     def vessel_type(self, value: Optional[VesselType]):
-        """对应Java: setVesselType(VesselType vesselType)"""
         self._vessel_type = value
-    
+
     @property
     def fleet(self) -> Dict[int, VesselType]:
-        """对应Java: getFleet()"""
+        """轮次索引到船舶类型的映射"""
         return self._fleet
-    
+
     @fleet.setter
     def fleet(self, value: Dict[int, VesselType]):
-        """对应Java: setFleet(Map<Integer, VesselType> fleet)"""
         self._fleet = value
-    
+
     @property
     def available_vessels(self) -> Dict[int, VesselType]:
-        """对应Java: getAvailableVessels()"""
+        """可用船舶映射：vesselID -> VesselType"""
         return self._available_vessels
-    
+
     @available_vessels.setter
     def available_vessels(self, value: Dict[int, VesselType]):
-        """对应Java: setAvailableVessels(Map<Integer, VesselType> availableVessels)"""
         self._available_vessels = value
 
-    def add_port_call(self, port: Port):
-        """
-        添加港口停靠
-        
-        Args:
-            port: 港口对象 
 
-        Returns:
-            int: 停靠索引，如果未找到则返回-1
+    def add_port_call(self, port_name: str, time_point: int) -> None:
         """
-        self._ports_of_call.append(port)
+        添加一个新的港口挂靠记录。
+
+        Args:
+            port_name (str): 港口名称
+            time_point (int): 挂靠时间点（相对于航线起点）
+        """
+        call_index = self._number_of_call  # 新挂靠的索引
+
+        # 更新列表
+        self._ports_of_call.append(port_name)
+        self._time_points_of_call.append(time_point)
+
+        # 创建 Port 对象并更新映射
+        port_obj = Port()
+        self._ports.append(port_obj)
+        self._port_calls[call_index] = port_obj
+
+        # 更新计数
         self._number_of_call += 1
-        return self._number_of_call - 1 

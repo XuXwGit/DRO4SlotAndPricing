@@ -1,6 +1,6 @@
 """
 @Author: XuXw
-@Description: 场景类，对应Java版本Scenario.java
+@Description: 场景类，
 @DateTime: 2024/12/4 21:54
 """
 from typing import List, Optional
@@ -9,14 +9,13 @@ import numpy as np
 class Scenario:
     """
     场景类，表示一组需求场景
-    对应Java类: multi.Scenario
     """
     
     def __init__(self, request: Optional[List[float]] = None, id: int = 0, scenario_id: int = 0):
         """
         初始化场景对象
         
-        支持三种构造方式，对应Java:
+        支持三种构造方式，
         - public Scenario()
         - public Scenario(double[] request)
         - public Scenario(double[] request, int id)
@@ -28,34 +27,23 @@ class Scenario:
         """
         # 基本属性
         self._id: int = id if id != 0 else scenario_id  # 使用id或scenario_id
-        self._request: List[float] = [] if request is None else request  # 对应Java: private double[] request
-        self._worse_request_set: Optional[List[int]] = None  # 对应Java: private List<Integer> worseRequestSet
+        self._request: List[float] = [] if request is None else request  
+        self._worse_request_set: Optional[List[int]] = None  
     
     def __post_init__(self):
         # 确保request被初始化为空列表
         if self.request is None:
             self.request = []
 
-    def __hash__(self):
-        """计算场景哈希值，用于判断场景是否重复"""
-        return hash(tuple(self.request))
-    
-    def __eq__(self, other):
-        """比较两个场景是否相等"""
-        if not isinstance(other, Scenario):
-            return False
-        return self.request == other.request
-    
     def __str__(self):
         """返回场景的字符串表示"""
         return f"Scenario(requests={self.request})"
 
-    # Getter和Setter方法
     @property
     def id(self) -> int:
         """
         获取场景ID
-        对应Java: getId() 使用@Getter注解自动生成
+        
         """
         return self._id
     
@@ -63,7 +51,7 @@ class Scenario:
     def id(self, value: int):
         """
         设置场景ID
-        对应Java中的setter方法
+        
         """
         self._id = value
     
@@ -71,7 +59,7 @@ class Scenario:
     def request(self) -> List[float]:
         """
         获取需求数组
-        对应Java: public double[] getRequest()
+        
         """
         return self._request
     
@@ -79,7 +67,7 @@ class Scenario:
     def request(self, value: List[float]):
         """
         设置需求数组
-        对应Java: public void setRequest(double[] request)
+        
         """
         self._request = value
     
@@ -87,7 +75,7 @@ class Scenario:
     def worse_request_set(self) -> Optional[List[int]]:
         """
         获取更差需求集合
-        对应Java: public List<Integer> getWorseRequestSet()
+        
         """
         return self._worse_request_set
     
@@ -95,14 +83,13 @@ class Scenario:
     def worse_request_set(self, value: List[int]):
         """
         设置更差需求集合
-        对应Java: public void setWorseRequestSet(List<Integer> worseRequestSet)
+        
         """
         self._worse_request_set = value
     
     def __eq__(self, other) -> bool:
         """
         判断两个场景是否相等
-        对应Java: @Override public boolean equals(Object o)
         
         Args:
             other: 要比较的对象
@@ -126,7 +113,7 @@ class Scenario:
     def __hash__(self) -> int:
         """
         计算场景对象的哈希值
-        对应Java: @Override public int hashCode()
+        
         
         Returns:
             int: 哈希值

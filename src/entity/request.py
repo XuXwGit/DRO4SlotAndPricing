@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 class Request:
     """
     订单/需求类
-    对应Java类: multi.network.Request
     
     该类包含了运输请求的所有相关信息，包括：
     - 请求基本信息（ID、到达时间等）
@@ -43,39 +42,41 @@ class Request:
             latest_destination_time: 最晚到达时间，默认为0
         """
         # 基本属性
-        self.request_id = request_id  # 对应Java: private int requestID
-        self.arrival_time = 0  # 对应Java: private int arrivalTime
+        self.request_id = request_id  
+        self.arrival_time = 0  
         
         # 需求相关属性
-        self.mean_demand = 0.0  # 对应Java: private double meanDemand
-        self.variance_demand = 0.0  # 对应Java: private double varianceDemand
+        self.base_demand = 0.0
+        self.mean_demand = 0.0  
+        self.variance_demand = 0.0  
         
         # 成本属性
-        self.penalty_cost = 0.0  # 对应Java: private double penaltyCost
+        self.penalty_cost = 0.0
+        self.long_haul_price = 100
         
         # 港口对象
-        self.origin = None  # 对应Java: private Port origin
-        self.destination = None  # 对应Java: private Port destination
+        self.origin = None  
+        self.destination = None  
         
         # 港口字符串表示
-        self.origin_port = origin_port  # 对应Java: private String originPort
-        self.destination_port = destination_port  # 对应Java: private String destinationPort
-        self.origin_group = 0  # 对应Java: private int originGroup
-        self.destination_group = 0  # 对应Java: private int destinationGroup
-        self.earliest_pickup_time = earliest_pickup_time  # 对应Java: private int earliestPickupTime
-        self.latest_destination_time = latest_destination_time  # 对应Java: private int latestDestinationTime
+        self.origin_port = origin_port  
+        self.destination_port = destination_port  
+        self.origin_group = 0  
+        self.destination_group = 0  
+        self.earliest_pickup_time = earliest_pickup_time  
+        self.latest_destination_time = latest_destination_time  
         
         # 重箱路径相关
-        self.laden_path_set = {}  # 对应Java: private List<ContainerPath> ladenPathSet
-        self.laden_paths = []  # 对应Java: private ContainerPath[] ladenPaths
-        self.laden_path_indexes = []  # 对应Java: private int[] ladenPathIndexes
-        self.number_of_laden_path = 0  # 对应Java: private int numberOfLadenPath
+        self.laden_path_set = {}  
+        self.laden_paths = []  
+        self.laden_path_indexes = []  
+        self.number_of_laden_path = 0  
         
         # 空箱路径相关
-        self.empty_path_set = {}  # 对应Java: private List<ContainerPath> emptyPathSet
-        self.empty_paths = []  # 对应Java: private int[] emptyPaths
-        self.empty_path_indexes = []  # 对应Java: private int[] emptyPathIndexes
-        self.number_of_empty_path = 0  # 对应Java: private int numberOfEmptyPath
+        self.empty_path_set = {}  
+        self.empty_paths = []  
+        self.empty_path_indexes = []  
+        self.number_of_empty_path = 0  
         
     def __str__(self) -> str:
         """

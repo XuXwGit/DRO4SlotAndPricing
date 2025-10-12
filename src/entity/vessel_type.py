@@ -1,6 +1,6 @@
 """
 @Author: XuXw
-@Description: 船舶类型类，对应Java版本VesselType.java
+@Description: 船舶类型类，
 @DateTime: 2024/12/4 21:54
 """
 
@@ -8,7 +8,6 @@
 class VesselType:
     """
     船舶类型类
-    对应Java类: multi.network.VesselType
     
     存储船舶类型相关的属性和信息
     """
@@ -25,18 +24,18 @@ class VesselType:
             max_num: 最大数量，默认为0
         """
         # 基本属性
-        self._id = id  # 对应Java: private int id
-        self._capacity = capacity  # 对应Java: private int capacity
-        self._cost = cost  # 对应Java: private double cost
-        self._route_id = route_id  # 对应Java: private int routeID
-        self._max_num = max_num  # 对应Java: private int maxNum
+        self._id = id  
+        self._capacity = capacity  
+        self._cost = cost  
+        self._route_id = route_id  
+        self._max_num = max_num  
     
     # Getter和Setter方法
     @property
     def id(self) -> int:
         """
         获取船舶类型ID
-        对应Java: getId()
+        
         """
         return self._id
     
@@ -44,7 +43,7 @@ class VesselType:
     def id(self, value: int):
         """
         设置船舶类型ID
-        对应Java: setId(int id)
+        
         """
         self._id = value
     
@@ -52,7 +51,7 @@ class VesselType:
     def vessel_id(self) -> int:
         """
         获取船舶ID
-        对应Java: getVesselID()
+        
         """
         return self._id
 
@@ -61,7 +60,7 @@ class VesselType:
     def capacity(self) -> int:
         """
         获取容量
-        对应Java: getCapacity()
+        
         """
         return self._capacity
     
@@ -69,7 +68,7 @@ class VesselType:
     def capacity(self, value: int):
         """
         设置容量
-        对应Java: setCapacity(int capacity)
+        
         """
         self._capacity = value
     
@@ -77,7 +76,7 @@ class VesselType:
     def cost(self) -> float:
         """
         获取成本
-        对应Java: getCost()
+        
         """
         return self._cost
     
@@ -85,7 +84,7 @@ class VesselType:
     def cost(self, value: float):
         """
         设置成本
-        对应Java: setCost(double cost)
+        
         """
         self._cost = value
     
@@ -93,7 +92,7 @@ class VesselType:
     def route_id(self) -> int:
         """
         获取航线ID
-        对应Java: getRouteID()
+        
         """
         return self._route_id
     
@@ -101,7 +100,7 @@ class VesselType:
     def route_id(self, value: int):
         """
         设置航线ID
-        对应Java: setRouteID(int routeID)
+        
         """
         self._route_id = value
     
@@ -109,7 +108,7 @@ class VesselType:
     def max_num(self) -> int:
         """
         获取最大数量
-        对应Java: getMaxNum()
+        
         """
         return self._max_num
     
@@ -117,7 +116,7 @@ class VesselType:
     def max_num(self, value: int):
         """
         设置最大数量
-        对应Java: setMaxNum(int maxNum)
+        
         """
         self._max_num = value
         

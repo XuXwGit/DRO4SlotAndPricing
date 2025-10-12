@@ -39,20 +39,20 @@ class Port:
                  discharge_cost: float = 0.0,
                  transshipment_cost: float = 0.0,
                  rental_cost: float = 0.0):
-        self._id: int = id  # 对应Java: private int id
-        self._port: str = port  # 对应Java: private String port
-        self._region: str = region  # 对应Java: private String region
-        self._whether_trans: int = whether_trans  # 对应Java: private int whetherTrans
-        self._group: int = group  # 对应Java: private int group
-        self._turn_over_time: int = turn_over_time  # 对应Java: private int turnOverTime
+        self._id: int = id  
+        self._port: str = port  
+        self._region: str = region  
+        self._whether_trans: int = whether_trans  
+        self._group: int = group  
+        self._turn_over_time: int = turn_over_time  
         
         # 成本属性
-        self._laden_demurrage_cost: float = laden_demurrage_cost  # 对应Java: private double ladenDemurrangeCost
-        self._empty_demurrage_cost: float = empty_demurrage_cost  # 对应Java: private double emptyDemurrangeCost
-        self._loading_cost: float = loading_cost  # 对应Java: private double loadingCost
-        self._discharge_cost: float = discharge_cost  # 对应Java: private double dischargeCost
-        self._transshipment_cost: float = transshipment_cost  # 对应Java: private double transshipmentCost
-        self._rental_cost: float = rental_cost  # 对应Java: private double rentalCost
+        self._laden_demurrage_cost: float = laden_demurrage_cost  
+        self._empty_demurrage_cost: float = empty_demurrage_cost  
+        self._loading_cost: float = loading_cost  
+        self._discharge_cost: float = discharge_cost  
+        self._transshipment_cost: float = transshipment_cost  
+        self._rental_cost: float = rental_cost  
     
     # Getter和Setter方法
     @property
