@@ -127,7 +127,7 @@ def generate_feasible_test_case(
     base_price_ratio=0.5,
     cost_ratio=0.8,
     demand_sensitivity=0.1,
-    uncertainty_std_ratio=0.1,  # ← 减小比例
+    uncertainty_std_ratio=0.0,
     seed=42
 ):
     if seed is not None:

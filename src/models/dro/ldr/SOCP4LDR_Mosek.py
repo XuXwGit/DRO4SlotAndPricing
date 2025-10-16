@@ -1,10 +1,8 @@
 """
-使用Mosek 建模 重构后的SOCP模型，由Qwen转换 LDR_based_SOCP.py 得到
+使用Mosek 建模 重构后的SOCP模型
 """
 import logging
-import numpy as np
-import sys
-from typing import Dict, Any, List
+from typing import Dict, Any
 import os
 import sys
 import mosek
@@ -14,22 +12,24 @@ print(PROJECT_ROOT)
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.models.model_builder import ModelBuilder, timeit_if_debug
-from src.utils.model_params import generate_feasible_test_case
 
 class SOCP4LDR_Mosek(ModelBuilder):
     """
-    使用 MOSEK Optimizer API (Task) 实现完整 DRP 问题：
-        max_{X,Y} sum_phi p_hat[phi] * X[phi] + beta_E^LDR(X, Y)
-
-    其中 beta_E^LDR 由 SOCP (A65) 给出。
+    使用 MOSEK Optimizer API (Task) 建模二阶段分布鲁棒优化 (SOCP-based LDR)
+    -------------------------------------------------------
+    说明：
+      - 模型形式如下: max_{X,Y} sum_phi p_hat[phi] * X[phi] + beta_E^LDR(X, Y)
+      - 第一阶段决策: X_phi, Y_phi (非负)
+      - 第二阶段决策 LDR: G^0, G^{(z)}, G^{(u)}, R^0, R^{(z)}, R^{(u)}
+      - alpha/gamma/delta 作为线性表达式 (LinExpr)
+      - 利用对偶与锥对偶转换，得到 π_q 等对偶变量，并构造 SOCP 块
     """
 
     def __init__(self, model_params: Dict[str, Any], debug: bool = False):
-        self.debug = debug
         super().__init__(info="SOCP4LDR", solver="mosek")
         self.set_model_params(model_params)
 
-        # 变量索引映射
+        # 辅助成员变量: 构建变量索引映射（Mosek不支持字典式的访问变量）
         self._var_index = {}
         self._next_var = 0
 
@@ -42,26 +42,34 @@ class SOCP4LDR_Mosek(ModelBuilder):
     def _get_var(self, name: str) -> int:
         return self._var_index[name]
 
+    # ---------------- Build Mathematics Model ----------------
     @timeit_if_debug
     def build_model(self):
-        """构建 MOSEK Task 模型"""
+        """
+        整体建模入口：创建 MOSEK Task 模型，调用子函数建变量、添加约束、目标函数
+        """
         self.model = mosek.Task()
 
-        self.create_variables()
-        self.set_objective()
-        self.add_constraints()
+        super().build_model()
 
     @timeit_if_debug
     def create_variables(self):
-        I1 = self.I1
+        """
+        创建决策变量（仅变量创建，不添加约束）：
+          - 第一阶段: X[φ], Y[φ] (>=0)
+          - 第二阶段对偶: r, s_i, t_i (<=0), l (<=0)
+          - 线性决策规则系数: G0[φ,t,p] (prob alloc coeff), Gz[φ,t,p,i], Gu[φ,t,p,k]
+          - R 系数: R0[φ,t], Rz[φ,t,i], Ru[φ,t,k]
+          - π_q: 对于每个 q, 创建 2*I1+2 个对偶分量 self.pi[q][0..2I1+1]
+        """
         # Stage I
         self.X_idx = {phi: self._add_var(f"X_{phi}") for phi in self.phi_list}
         self.Y_idx = {phi: self._add_var(f"Y_{phi}") for phi in self.phi_list}
 
         # Stage II duals
         self.r_idx = self._add_var("r")
-        self.s_idx = {i: self._add_var(f"s_{i}") for i in range(I1)}
-        self.t_idx = {k: self._add_var(f"t_{k}") for k in range(I1)}
+        self.s_idx = {i: self._add_var(f"s_{i}") for i in range(self.I1)}
+        self.t_idx = {k: self._add_var(f"t_{k}") for k in range(self.I1)}
         self.l_idx = self._add_var("l")
 
         # LDR G
@@ -72,9 +80,9 @@ class SOCP4LDR_Mosek(ModelBuilder):
             for t in self.t_list:
                 for p in self.p_list:
                     self.G0_idx[(phi, t, p)] = self._add_var(f"G0_{phi}_{t}_{p}")
-                    for i in range(I1):
+                    for i in range(self.I1):
                         self.Gz_idx[(phi, t, p, i)] = self._add_var(f"Gz_{phi}_{t}_{p}_{i}")
-                    for k in range(I1):
+                    for k in range(self.I1):
                         self.Gu_idx[(phi, t, p, k)] = self._add_var(f"Gu_{phi}_{t}_{p}_{k}")
 
         # LDR R
@@ -84,15 +92,15 @@ class SOCP4LDR_Mosek(ModelBuilder):
         for phi in self.phi_list:
             for t in self.t_list:
                 self.R0_idx[(phi, t)] = self._add_var(f"R0_{phi}_{t}")
-                for i in range(I1):
+                for i in range(self.I1):
                     self.Rz_idx[(phi, t, i)] = self._add_var(f"Rz_{phi}_{t}_{i}")
-                for k in range(I1):
+                for k in range(self.I1):
                     self.Ru_idx[(phi, t, k)] = self._add_var(f"Ru_{phi}_{t}_{k}")
 
         # π_q
         self.pi_idx = {}
         for q in self.Q_list:
-            self.pi_idx[q] = [self._add_var(f"pi_{q}_{j}") for j in range(3*I1+3)]
+            self.pi_idx[q] = [self._add_var(f"pi_{q}_{j}") for j in range(3*self.I1+3)]
 
         self.num_vars = self._next_var
         self.model.appendvars(self.num_vars)
@@ -114,9 +122,12 @@ class SOCP4LDR_Mosek(ModelBuilder):
             self.model.putvarbound(self.Y_idx[phi], mosek.boundkey.lo, 0.0, +0.0)
 
     @timeit_if_debug
-
     def set_objective(self):
-
+        """
+          max:
+            - Stage I:  Σ_φ p^hat_φ X_φ
+            - Stage II:  r + sum_i s_i * mu_i + sum_i t_i * sigma_sq_i + l * (1^T Σ 1)
+        """
         # c_j for all variables
         c = [0.0] * self._next_var
 
@@ -137,18 +148,30 @@ class SOCP4LDR_Mosek(ModelBuilder):
 
     @timeit_if_debug
     def add_constraints(self):
+        """
+        添加全体约束的主入口：
+          - 第一阶段约束 (capacity)
+          - Δ 与 R 之间的关系（表达式）及“ Δ/R=0 ”
+          - 对每一个 q: 构造 α/γ 表达式并建立 SOCP 块
+                （C^T π = α_z, D^T π = α_u, d^T π = γ, h^T π ≤ -α0, E^T π = 0）
+          - 对每个 π_q 添加锥约束 (||x_1:n-1||2 ≤ x_n)
+        """
         # # 1) 第一阶段约束
         self.add_first_stage_constraints()
 
-        # 2) delta & R 关系（构造表达式，添加 0/0 约束）
+        # 2) LDR: delta & R 关系（添加 Δ = 0/ R = 0 约束）
         self.set_delta_and_R()
         # 3) 对每个 q: 构造 alpha/gamma，并添加 SOCP 对偶约束块
         for q in self.Q_list:
             self.add_SOCP_block(q)
 
     def add_first_stage_constraints(self):
-        """约束 (28): 网络容量"""
-        for edge, cap in self.A_prime.items():
+        """
+        第一阶段网络容量约束：
+          对于每条边 e=(n,n') in A_prime: Σ_{φ: e∈paths[φ]} (X_φ + Y_φ) ≤ capacity_e
+        添加位置：模型中第一阶段约束（与论文中的可行集 X 一致）
+        """
+        for edge, capacity in self.A_prime.items():
             vars_ = []
             coeffs = []
             for phi in self.phi_list:
@@ -161,18 +184,31 @@ class SOCP4LDR_Mosek(ModelBuilder):
                 self.model.appendcons(1)
                 con_idx = self.model.getnumcon() - 1
                 self.model.putarow(con_idx, vars_, coeffs)
-                self.model.putconbound(con_idx, mosek.boundkey.up, -0.0, cap)
+                self.model.putconbound(con_idx, mosek.boundkey.up, -0.0, capacity)
 
     def set_delta_and_R(self):
-        """约束 (14)–(19)"""
+        """
+        构造 Δ 表达式，并依据 t_d_phi 添加零约束：
+        论文形式：
+          Δ^0_{φt}          = R^0_{φt} - Y_φ + Σ_{t'<t} ( d^0_{φt'} - a Σ_p p G^0_{φt'p} - a p̂_φ )
+          Δ^{(z)}_{φt,i}  = R^{(z)}_{φt,i} + Σ_{t'<t} ( d^{(z)}_{φt',i} - a Σ_p p G^{(z)}_{φt'p,i} )
+          Δ^{(u)}_{φt,k} = R^{(u)}_{φt,k} - a Σ_{t'<t} Σ_p p G^{(u)}_{φt'p,k}
+        约束：
+          1 ≤t ≤ t_d_phi[φ] :  Δ^*_{φt,*} == 0 （需求期内，递推公式带入LDR，这些量为0）
+          t > t_d                  :  R^*_{φt,*} == 0 （超出需求期，R 置 0）
+        实现：
+          - Δ 以 LinExpr 存储 self.delta0[(φ,t)] 等
+          - 直接对 Δ 或 R 添加等式约束
+        """
         for phi in self.phi_list:
-            t_deadline = self.t_d_phi[phi]
+            t_deadline = self.t_d_phi.get(phi, 0)  # 获取该路径的需求截止时间
             for t in self.t_list:
                 if 1 <= t <= t_deadline:
-                    # (14): R0 - sum_{t'<t} a sum_p p G0 = Y - sum_{t'<t} (d0 + a p_hat)
+                    # print(f"  -> Adding Δ=0 constraints for (φ ={phi}, t={t})")
+                    # (14): R0 - sum_{t'<t} a sum_p p G0 - Y = - sum_{t'<t} (d0 + a p_hat)
                     vars_ = [self.R0_idx[(phi, t)], self.Y_idx[phi]]
                     coeffs = [1.0, -1.0]
-                    rhs = 0.0
+                    rhs = 0.0       # - sum_{t'<t} (d0 + a p_hat)
                     for tp in self.t_list:
                         if tp < t:
                             d0_val = self.d_0_phi_t.get((phi, tp), 0.0)
@@ -180,6 +216,8 @@ class SOCP4LDR_Mosek(ModelBuilder):
                             for p in self.p_list:
                                 vars_.append(self.G0_idx[(phi, tp, p)])
                                 coeffs.append(-self.a * p)
+                        else:
+                            break
                     self.model.appendcons(1)
                     con_idx = self.model.getnumcon() - 1
                     self.model.putarow(con_idx, vars_, coeffs)
@@ -216,9 +254,9 @@ class SOCP4LDR_Mosek(ModelBuilder):
                         con_idx = self.model.getnumcon() - 1
                         self.model.putarow(con_idx, vars_, coeffs)
                         self.model.putconbound(con_idx, mosek.boundkey.fx, rhs, rhs)
-
                 elif t > t_deadline:
                     # (17)–(19): R = 0
+                    # print(f"  -> Adding R=0 constraints for (φ ={phi}, t={t})")
                     self.model.appendcons(1)
                     con_idx = self.model.getnumcon() - 1
                     self.model.putarow(con_idx, [self.R0_idx[(phi, t)]], [1.0])
@@ -511,6 +549,8 @@ class SOCP4LDR_Mosek(ModelBuilder):
         except mosek.Error:
             return "ERROR"
 
+        self.model.writedata(self.info + '.ptf')
+
         if solsta == mosek.solsta.optimal:
             return "OPTIMAL"
         elif prosta == mosek.prosta.prim_infeas:
@@ -544,7 +584,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
             # 原始不可行：导出问题文件用于调试
             self.model.writedata(file_name + '_infeasible.ptf')
             self.model.writedata(file_name + '.ptf')
-            raise Exception("模型无可行解 (Primal Infeasible)")
+            logging.warning("模型无可行解 (Primal Infeasible)")
 
         elif prosta == mosek.prosta.dual_infeas:
             # 对偶不可行 → 通常意味着原始问题无界
@@ -561,3 +601,13 @@ class SOCP4LDR_Mosek(ModelBuilder):
 
         else:
             logging.warning(f"其他状态：prosta={prosta}, solsta={solsta}")
+
+    def print_model_info(self):
+        """
+        打印 模型的基本信息：变量数量和约束数量。
+        """
+        pass
+
+
+    def write(self):
+        self.model.writedata(self.info + '.ptf')

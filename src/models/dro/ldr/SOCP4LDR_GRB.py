@@ -1,4 +1,6 @@
-import numpy as np
+"""
+使用 Gurobi 建模 重构后的SOCP模型
+"""
 import os
 import sys
 import gurobipy as gp
@@ -10,47 +12,32 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from src.models.model_builder import MAXIMIZE, OPTIMAL, ModelBuilder, VType, timeit_if_debug
 
-
 class SOCP4LDR(ModelBuilder):
     """
-    二阶段分布鲁棒优化 (SOCP-based LDR)
+    使用 Gurobi 建模二阶段分布鲁棒优化 (SOCP-based LDR)
     -------------------------------------------------------
     说明：
-      - 用于求解给定第一阶段决策 X, Y 下的第二阶段问题 β(X, Y)。
+      - 模型形式如下: max_{X,Y} sum_phi p_hat[phi] * X[phi] + beta_E^LDR(X, Y)
       - 第一阶段决策: X_phi, Y_phi (非负)
-      - 第二阶段通过 LDR 构建：G^0, G^{(z)}, G^{(u)}, R^0, R^{(z)}, R^{(u)}
+      - 第二阶段决策 LDR: G^0, G^{(z)}, G^{(u)}, R^0, R^{(z)}, R^{(u)}
+      - alpha/gamma/delta 作为线性表达式 (LinExpr)
       - 利用对偶与锥对偶转换，得到 π_q 等对偶变量，并构造 SOCP 块
-      - 本实现把 alpha/gamma/delta 作为线性表达式 (LinExpr)，
-        与论文的线性化/对偶关系一一对应（详见方法注释）
     """
-    def __init__(self, model_params=None, debug=False) -> None:
-        """
-        初始化并存储固定参数（不会被建为变量）。
-
-        参数:
-        """
+    def __init__(self, model_params=None) -> None:
         super().__init__(info="SOCP4LDR", solver="gurobi")
         self.set_model_params(model_params)
 
-    # ---------------- Build & Variables ----------------
+    # ---------------- Build Mathematics Model ----------------
     @timeit_if_debug
     def build_model(self):
         """
-        整体建模入口：创建 Gurobi 模型对象，调用子函数建变量、添加约束、设目标。
+        整体建模入口：创建 Gurobi 模型对象，调用子函数建变量、添加约束、目标函数
         """
         # 设置参数
         self.model.Params.NonConvex = 2
         self.model.Params.OutputFlag = 1
 
-        # 创建决策变量
-        self.create_variables()
-        # 添加约束
-        self.add_constraints()
-        # 设置目标函数
-        self.set_objective()
-
-        # 打印模型简单信息
-        self.print_model_info()
+        super().build_model()
 
     @timeit_if_debug
     def create_variables(self):
@@ -119,7 +106,6 @@ class SOCP4LDR(ModelBuilder):
     @timeit_if_debug
     def set_objective(self):
         """
-        目标函数（对应论文中的对偶形式）：
           max:
             - Stage I:  Σ_φ p^hat_φ X_φ
             - Stage II:  r + sum_i s_i * mu_i + sum_i t_i * sigma_sq_i + l * (1^T Σ 1)
@@ -137,7 +123,7 @@ class SOCP4LDR(ModelBuilder):
         """
         添加全体约束的主入口：
           - 第一阶段约束 (capacity)
-          - Δ 与 R 之间的关系（表达式）及“0 条件”
+          - Δ 与 R 之间的关系（表达式）及“ Δ/R=0 ”
           - 对每一个 q: 构造 α/γ 表达式并建立 SOCP 块
                 （C^T π = α_z, D^T π = α_u, d^T π = γ, h^T π ≤ -α0, E^T π = 0）
           - 对每个 π_q 添加锥约束 (||x_1:n-1||2 ≤ x_n)
@@ -145,13 +131,11 @@ class SOCP4LDR(ModelBuilder):
         # # 1) 第一阶段约束
         self.add_first_stage_constraints()
 
-        # 2) delta & R 关系（构造表达式，添加 0/0 约束）
+        # 2) LDR: delta & R 关系（构造表达式，添加 0/0 约束）
         self.set_delta_and_R()
         # 3) 对每个 q: 构造 alpha/gamma，并添加 SOCP 对偶约束块
         for q in self.Q_list:
             self.add_SOCP_block(q)
-
-        self.model.update()
 
     @timeit_if_debug
     def add_first_stage_constraints(self):
@@ -170,25 +154,26 @@ class SOCP4LDR(ModelBuilder):
     @timeit_if_debug
     def set_delta_and_R(self):
         """
-        构造 Δ 表达式，并依据 t_d_phi 添加零/零互斥约束：
-        论文形式（示例）：
+        构造 Δ 表达式，并依据 t_d_phi 添加零约束：
+        论文形式：
           Δ^0_{φt}          = R^0_{φt} - Y_φ + Σ_{t'<t} ( d^0_{φt'} - a Σ_p p G^0_{φt'p} - a p̂_φ )
           Δ^{(z)}_{φt,i}  = R^{(z)}_{φt,i} + Σ_{t'<t} ( d^{(z)}_{φt',i} - a Σ_p p G^{(z)}_{φt'p,i} )
           Δ^{(u)}_{φt,k} = R^{(u)}_{φt,k} - a Σ_{t'<t} Σ_p p G^{(u)}_{φt'p,k}
         约束：
-          如果 1 ≤t ≤ t_d_phi[φ]，则 Δ^*_{φt,*} == 0 （需求期内，递推公式带入LDR，这些量为0）
-          否则 (t > t_d), R^*_{φt,*} == 0 （超出需求期，R 置 0）
+          1 ≤t ≤ t_d_phi[φ] :  Δ^*_{φt,*} == 0 （需求期内，递推公式带入LDR，这些量为0）
+          t > t_d                  :  R^*_{φt,*} == 0 （超出需求期，R 置 0）
         实现：
           - Δ 以 LinExpr 存储 self.delta0[(φ,t)] 等
           - 直接对 Δ 或 R 添加等式约束
         """
         for phi in self.phi_list:
+            t_deadline = self.t_d_phi.get(phi, 0)  # 获取该路径的需求截止时间
             for t in self.t_list:
                 # Δ^0 表达式
                 expr0 = self.R0[(phi, t)] - self.Y[phi] + gp.quicksum(
                     (self.d_0_phi_t.get((phi, tp), 0.0)
                      - self.a * gp.quicksum(self.G0[(phi, tp, p)] * p for p in self.p_list)
-                     - self.a * self.p_hat.get(phi, 0.0))
+                     + self.a * self.p_hat.get(phi, 0.0))
                     for tp in self.t_list if tp < t
                 )
                 self.delta0[(phi, t)] = expr0
@@ -210,8 +195,6 @@ class SOCP4LDR(ModelBuilder):
                     self.delta_u[(phi, t, k)] = expru
 
                 # --- Step 2: 添加边界约束 ---
-                t_deadline = self.t_d_phi.get(phi, 0)  # 获取该路径的需求截止时间
-
                 # 根据 t_d_phi 添加 Δ^*_{φt,*} == 0 或 R^*_{φt,*} == 0 的约束
                 if 1 <= t <= t_deadline:
                     # 在需求有效期内 (1 <= t <= t_d_phi)，Δ = 0
@@ -618,10 +601,7 @@ class SOCP4LDR(ModelBuilder):
 
     def print_model_info(self):
         """
-        打印 Gurobi 模型的基本信息：变量数量和约束数量。
-
-        参数:
-            model (gurobipy.Model): 已构建的 Gurobi 模型对象。
+        打印 模型的基本信息：变量数量和约束数量。
         """
         num_vars = self.model.NumVars
         num_constrs =self.model.NumConstrs
@@ -667,3 +647,10 @@ class SOCP4LDR(ModelBuilder):
                 logging.warning(f"模型无界或不可行，当前目标值：{self.model.ObjVal}") # type: ignore
             else:
                 logging.warning(f"其他状态码：{self.model.status}") # type: ignore
+
+
+    def write(self):
+        """
+        将模型写入文件，以便稍后重新加载。
+        """
+        self.model.write(self.info + '.lp')

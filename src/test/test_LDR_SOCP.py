@@ -46,14 +46,16 @@ if __name__ == "__main__":
         )
 
 
-    # socp = SOCP4LDR(model_params=model_params)
-    socp = SOCP4LDR_Mosek(model_params=model_params)
+    socp = SOCP4LDR(model_params=model_params)
+    # socp = SOCP4LDR_Mosek(model_params=model_params)
 
     socp.build_model()
 
     # 求解
     socp.solve()
     print(socp.get_status())
+
+    socp.write()
 
     # check feasibility
     # run_all_validations(socp.get_solution(), model_params, socp.get_pi_solution())

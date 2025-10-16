@@ -166,11 +166,12 @@ class ModelBuilder:
         Q_list.append('obj')
         for phi in self.phi_list:
             for t in self.t_list:
-                Q_list.append(('svc', phi, t))
-                Q_list.append(('mix', phi, t))
-                for p in self.p_list:
-                    Q_list.append(('ng', phi, t, p))
-                Q_list.append(('nr', phi, t))
+                # if t <= self.t_d_phi[phi]:  # ← 只对需求期内的 t 添加约束
+                    Q_list.append(('svc', phi, t))
+                    Q_list.append(('mix', phi, t))
+                    for p in self.p_list:
+                        Q_list.append(('ng', phi, t, p))
+                    Q_list.append(('nr', phi, t))
         self.Q_list = Q_list
 
         return Q_list
@@ -303,3 +304,7 @@ class ModelBuilder:
         self.model.optimize()
         self.print_model_status()
         self.extract_solution()
+
+    def write(self):
+        """ 将模型写入文件 """
+        pass
