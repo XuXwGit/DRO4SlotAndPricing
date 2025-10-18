@@ -42,12 +42,13 @@ if __name__ == "__main__":
             num_periods=2,
             num_prices=1,
             uncertainty_dim=1,
+            uncertainty_std_ratio=0,
             seed=42  # 固定种子以复现结果
         )
 
 
-    socp = SOCP4LDR(model_params=model_params)
-    # socp = SOCP4LDR_Mosek(model_params=model_params)
+    # socp = SOCP4LDR(model_params=model_params)
+    socp = SOCP4LDR_Mosek(model_params=model_params)
 
     socp.build_model()
 

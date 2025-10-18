@@ -70,7 +70,7 @@ class ModelBuilder:
             I1 : int
                 不确定性维度 (ξ 的维数)。
             phi_list : list of hashable
-                路径/产品集合 Φ。
+                路径集合 Φ。
             t_list : list of int
                 时间段集合 T（通常从1开始; 若在模型中涉及 t=0, 请保证 d_0_phi_t 包含 t=0）。
             p_list : list of numeric
@@ -190,34 +190,27 @@ class ModelBuilder:
         D = np.zeros((3 * self.I1 + 3, self.I1))
 
         for i in range(self.I1):
-            C[3*i, i] = 2.0
-            D[3*i+1, i] = 1.0
-            D[3*i+2, i] = 1.0
+            C[3*i+1, i] = -2.0
+            D[3*i, i] = -1.0
+            D[3*i+2, i] = -1.0
 
-        # 最后三行 C: [2 2 2,    d: [0
-        #                        0 0 0,         1
-        #                        0 0 0]         1]
-        C[3*self.I1, :] = 2.0
+        C[3*self.I1+1, :] = -2.0
 
         d = np.zeros(3 * self.I1 + 3)
-        d[3*self.I1 + 1] = 1.0
-        d[3*self.I1 + 2] = 1.0
+        d[3*self.I1] = -1.0
+        d[3*self.I1 + 2] = -1.0
 
         # h 常数项
         h = np.zeros(3 * self.I1 + 3)
         for i in range(self.I1):
-            h[3*i] = 2 * self.mu[i]
-            h[3*i+1] = 1.0
+            h[3*i] = 1.0
+            h[3*i+1] = -2 * self.mu[i]
             h[3*i+2] = -1.0
-        h[3*self.I1] = 2 * sum(self.mu[i] for i in range(self.I1))
-        h[3*self.I1 + 1] = 1.0
+        h[3*self.I1] = 1.0
+        h[3*self.I1 + 1] = -2 * sum(self.mu[i] for i in range(self.I1))
         h[3*self.I1 + 2] = -1.0
 
-        # E = [ [0, 0, -1] ... [0, 0 , -1] ]
         E = - np.zeros((3 * self.I1 + 3, self.I1 + 1))
-        # for i in range(self.I1 + 1):
-        #     E[3*i + 1, i] = -1
-        #     E[3*i + 2, i] = -1
 
         self.C, self.D, self.d, self.h, self.E = C, D, d, h, E
         self.model_params['C'] = self.C
@@ -228,16 +221,16 @@ class ModelBuilder:
 
         # --- 调试输出 ---
         print("\n--- DEBUG: Matrix Structure ---")
-        print("C matrix (shape: {}):".format(C.shape))
-        print(C)
-        print("D matrix (shape: {}):".format(D.shape))
-        print(D)
-        print("d vector:", d.shape)
-        print(d)
-        print("h vector:", h.shape)
-        print(h)
-        print("E matrix (shape: {}):".format(E.shape))
-        print(E)
+        print("C matrix (shape: {}):".format(self.C.shape))
+        print(self.C)
+        print("D matrix (shape: {}):".format(self.D.shape))
+        print(self.D)
+        print("d vector:", self.d.shape)
+        print(self.d)
+        print("h vector:", self.h.shape)
+        print(self.h)
+        print("E matrix (shape: {}):".format(self.E.shape))
+        print(self.E)
         print("--- END DEBUG ---\n")
 
     @timeit_if_debug

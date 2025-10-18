@@ -143,7 +143,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
             c[self.t_idx[k]] = self.sigma_sq[k]
         c[self.l_idx] = self.cost_cov
 
-        self.model.putclist(range(self._next_var), c)
+        # self.model.putclist(range(self._next_var), c)
         self.model.putobjsense(mosek.objsense.maximize)
 
     @timeit_if_debug
@@ -161,7 +161,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
 
         # 2) LDR: delta & R 关系（添加 Δ = 0/ R = 0 约束）
         self.set_delta_and_R()
-        # 3) 对每个 q: 构造 alpha/gamma，并添加 SOCP 对偶约束块
+        # # 3) 对每个 q: 构造 alpha/gamma，并添加 SOCP 对偶约束块
         for q in self.Q_list:
             self.add_SOCP_block(q)
 
@@ -204,12 +204,32 @@ class SOCP4LDR_Mosek(ModelBuilder):
             t_deadline = self.t_d_phi.get(phi, 0)  # 获取该路径的需求截止时间
             for t in self.t_list:
                 if 1 <= t <= t_deadline:
-                    # print(f"  -> Adding Δ=0 constraints for (φ ={phi}, t={t})")
+                    print(f"  -> Adding Δ=0 constraints for (φ ={phi}, t={t})")
                     # (14): R0 - sum_{t'<t} a sum_p p G0 - Y = - sum_{t'<t} (d0 + a p_hat)
-                    vars_ = [self.R0_idx[(phi, t)], self.Y_idx[phi]]
-                    coeffs = [1.0, -1.0]
-                    rhs = 0.0       # - sum_{t'<t} (d0 + a p_hat)
-                    for tp in self.t_list:
+                    self.add_delta0_eq_0(phi, t)
+
+                    # (15): Rz + sum (d_z - a sum p Gz) = 0
+                    self.add_delta_z_eq_0(phi, t)
+
+                    # (16): Ru - a sum p Gu = 0
+                    self.add_delta_u_eq_0(phi, t)
+
+                elif t > t_deadline:
+                    # (17)–(19): R = 0
+                    print(f"  -> Adding R=0 constraints for (φ ={phi}, t={t})")
+                    self.add_R_0_eq_0(phi, t)
+                    # R^z = 0
+                    self.add_R_z_eq_0(phi, t)
+                    # R^u = 0
+                    self.add_R_u_eq_0(phi, t)
+
+    def add_delta0_eq_0(self, phi, t):
+        """约束 (14)"""
+        # (14): R0 - sum_{t'<t} a sum_p p G0 - Y = - sum_{t'<t} (d0 + a p_hat)
+        vars_ = [self.R0_idx[(phi, t)], self.Y_idx[phi]]
+        coeffs = [1.0, -1.0]
+        rhs = 0.0       # - sum_{t'<t} (d0 + a p_hat)
+        for tp in self.t_list:
                         if tp < t:
                             d0_val = self.d_0_phi_t.get((phi, tp), 0.0)
                             rhs -= (d0_val + self.a * self.p_hat.get(phi, 0.0))
@@ -218,12 +238,12 @@ class SOCP4LDR_Mosek(ModelBuilder):
                                 coeffs.append(-self.a * p)
                         else:
                             break
-                    self.model.appendcons(1)
-                    con_idx = self.model.getnumcon() - 1
-                    self.model.putarow(con_idx, vars_, coeffs)
-                    self.model.putconbound(con_idx, mosek.boundkey.fx, rhs, rhs)
+        self.model.appendcons(1)
+        con_idx = self.model.getnumcon() - 1
+        self.model.putarow(con_idx, vars_, coeffs)
+        self.model.putconbound(con_idx, mosek.boundkey.fx, rhs, rhs)
 
-                    # (15): Rz + sum (d_z - a sum p Gz) = 0
+    def add_delta_z_eq_0(self, phi, t):
                     for i in range(self.I1):
                         vars_ = [self.Rz_idx[(phi, t, i)]]
                         coeffs = [1.0]
@@ -240,7 +260,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
                         self.model.putarow(con_idx, vars_, coeffs)
                         self.model.putconbound(con_idx, mosek.boundkey.fx, rhs, rhs)
 
-                    # (16): Ru - a sum p Gu = 0
+    def add_delta_u_eq_0(self, phi, t):
                     for k in range(self.I1):
                         vars_ = [self.Ru_idx[(phi, t, k)]]
                         coeffs = [1.0]
@@ -254,26 +274,26 @@ class SOCP4LDR_Mosek(ModelBuilder):
                         con_idx = self.model.getnumcon() - 1
                         self.model.putarow(con_idx, vars_, coeffs)
                         self.model.putconbound(con_idx, mosek.boundkey.fx, rhs, rhs)
-                elif t > t_deadline:
-                    # (17)–(19): R = 0
-                    # print(f"  -> Adding R=0 constraints for (φ ={phi}, t={t})")
+
+    def add_R_0_eq_0(self, phi, t):
                     self.model.appendcons(1)
                     con_idx = self.model.getnumcon() - 1
                     self.model.putarow(con_idx, [self.R0_idx[(phi, t)]], [1.0])
                     self.model.putconbound(con_idx, mosek.boundkey.fx, 0.0, 0.0)
 
+    def add_R_z_eq_0(self, phi, t):
                     for i in range(self.I1):
                         self.model.appendcons(1)
                         con_idx = self.model.getnumcon() - 1
                         self.model.putarow(con_idx, [self.Rz_idx[(phi, t, i)]], [1.0])
                         self.model.putconbound(con_idx, mosek.boundkey.fx, 0.0, 0.0)
 
+    def add_R_u_eq_0(self, phi, t):
                     for k in range(self.I1):
                         self.model.appendcons(1)
                         con_idx = self.model.getnumcon() - 1
                         self.model.putarow(con_idx, [self.Ru_idx[(phi, t, k)]], [1.0])
                         self.model.putconbound(con_idx, mosek.boundkey.fx, 0.0, 0.0)
-
 
     def add_SOCP_block(self, q):
         """约束 (20)–(25) for each q"""
@@ -291,32 +311,44 @@ class SOCP4LDR_Mosek(ModelBuilder):
     def set_second_order_constr(self, q):
         # (25): SOC constraints — I1+1 个 3D 锥
         for i in range(self.I1):
-            # || [pi[3i], pi[3i+1]] ||_2 <= pi[3i+2]
-            afe_idx = self.model.getnumafe()
-            self.model.appendafes(3)
-            # t - pi[3i+2] = 0
-            self.model.putafefentry(afe_idx, self.pi_idx[q][3*i+2], -1.0)
-            self.model.putafeg(afe_idx, 0.0)
-            # x1 - pi[3i] = 0
-            self.model.putafefentry(afe_idx+1, self.pi_idx[q][3*i], -1.0)
-            self.model.putafeg(afe_idx+1, 0.0)
-            # x2 - pi[3i+1] = 0
-            self.model.putafefentry(afe_idx+2, self.pi_idx[q][3*i+1], -1.0)
-            self.model.putafeg(afe_idx+2, 0.0)
-            quad_dom = self.model.appendquadraticconedomain(3)
-            self.model.appendacc(quad_dom, [afe_idx, afe_idx+1, afe_idx+2], None)
+            # || [pi[3i+1], pi[3i+2]] ||_2 <= pi[3i]
+            self.add_soc_constraint(self.pi_idx[q][3*i], [self.pi_idx[q][3*i+1], self.pi_idx[q][3*i+2]])
 
         # 聚合锥
-        afe_idx = self.model.getnumafe()
-        self.model.appendafes(3)
-        self.model.putafefentry(afe_idx, self.pi_idx[q][3*self.I1+2], -1.0)
-        self.model.putafeg(afe_idx, 0.0)
-        self.model.putafefentry(afe_idx+1, self.pi_idx[q][3*self.I1], -1.0)
-        self.model.putafeg(afe_idx+1, 0.0)
-        self.model.putafefentry(afe_idx+2, self.pi_idx[q][3*self.I1+1], -1.0)
-        self.model.putafeg(afe_idx+2, 0.0)
-        quad_dom = self.model.appendquadraticconedomain(3)
-        self.model.appendacc(quad_dom, [afe_idx, afe_idx+1, afe_idx+2], None)
+        self.add_soc_constraint(self.pi_idx[q][3*self.I1], [self.pi_idx[q][3*self.I1+1]])
+
+    def add_soc_constraint(self, t_var_idx, y_var_indices):
+        """
+        添加二阶锥约束: ||y||_2 <= t
+
+        参数:
+            t_var_idx (int): 标量变量 t 的 MOSEK 变量索引（必须是单个整数）
+            y_var_indices (list of int): 向量 y 的 MOSEK 变量索引列表，如 [y0, y1, ..., y_{n-1}]
+
+        效果:
+            向 self.model 添加一个标准二次锥约束：
+                [t, y0, y1, ..., y_{n-1}] ∈ Q^{n+1}
+        """
+        n = len(y_var_indices)
+        if n == 0:
+            raise ValueError("y_var_indices cannot be empty")
+
+        # 获取当前 AFE 数量，并追加 (n+1) 个 AFE
+        afe_base = self.model.getnumafe()
+        self.model.appendafes(n + 1)
+
+        # AFE[0] = t
+        self.model.putafefentry(afe_base, t_var_idx, 1.0)
+        self.model.putafeg(afe_base, 0.0)
+
+        # AFE[1..n] = y[0..n-1]
+        for i, y_idx in enumerate(y_var_indices):
+            self.model.putafefentry(afe_base + 1 + i, y_idx, 1.0)
+            self.model.putafeg(afe_base + 1 + i, 0.0)
+
+        quad_dom = self.model.appendquadraticconedomain(n + 1)
+        afe_list = list(range(afe_base, afe_base + n + 1))
+        self.model.appendacc(quad_dom, afe_list, None)
 
 
         # 辅助函数  将表达式 e 合并到 base_vars/base_coeffs 中，带符号

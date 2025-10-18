@@ -127,7 +127,7 @@ def generate_feasible_test_case(
     base_price_ratio=0.5,
     cost_ratio=0.8,
     demand_sensitivity=0.1,
-    uncertainty_std_ratio=0.0,
+    uncertainty_std_ratio=0.1,
     seed=42
 ):
     if seed is not None:
@@ -147,7 +147,7 @@ def generate_feasible_test_case(
         p_hat[phi] = p_min * base_price_ratio
         t_d_phi[phi] = np.random.randint(max(1, num_periods - 1), num_periods)
 
-    # --- 3. 基础需求 (动态跟踪最大需求) ---
+    # --- 3. 基础需求---
     d_0_phi_t = {}
     for phi in phi_list:
         for t in t_list:

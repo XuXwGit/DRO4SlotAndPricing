@@ -253,12 +253,16 @@ class SOCP4LDR(ModelBuilder):
             # α0_obj = r - Σ c_{φtp} * G0_{φtp}
             self.alpha0[q] = self.r - gp.quicksum(
                 self.c_phi_tp.get((phi, t, p), 0.0) * self.G0[(phi, t, p)]
-                for phi in self.phi_list for t in self.t_list for p in self.p_list
+                for phi in self.phi_list
+                for t in self.t_list
+                for p in self.p_list
             )
             # α_z^{obj}_i = s - Σ c * Gz
             self.alpha_z[q] = [self.s[i] -gp.quicksum(
                     self.c_phi_tp.get((phi, t, p), 0.0) * self.Gz[(phi, t, p, i)]
-                    for phi in self.phi_list for t in self.t_list for p in self.p_list
+                    for phi in self.phi_list
+                    for t in self.t_list
+                    for p in self.p_list
                 ) for i in range(self.I1)]
             # α_u^{obj}_k = t - Σ c * Gu
             self.alpha_u[q] = [self.t[k] -gp.quicksum(
@@ -367,15 +371,35 @@ class SOCP4LDR(ModelBuilder):
         # 6) π_q ⪰_K 0 : I1+1个三维二阶锥，对 (3i, 3i+1, 3i+2) ⪰Q^3 0
         #    每一对规范为: || [π_q[3i], π_q[3i+1]] ||_2 ≤ π_q[3i+2], 且 π_q[3i+2] ≥ 0
         for i in range(self.I1):
-            norm_var = [self.pi[q][3 * i], self.pi[q][3 * i + 1]]
-            rhs_var = self.pi[q][3 * i + 2]
+            norm_var = [self.pi[q][3 * i+1], self.pi[q][3 * i +2]]
+            rhs_var = self.pi[q][3 * i]
             # 锥约束: ||[π[3i], π[3i+1]]||_2 <= π[3i+2]
-            self.model.addQConstr(gp.quicksum(v * v for v in norm_var) <= rhs_var * rhs_var, name=f"qconstr_norm_q{q}_pair{i}".replace(" ", "_"))
+            self.add_soc_constraint(t_var=rhs_var,y_vars=norm_var, name=f"qconstr_norm_q{q}_pair{i}".replace(" ", "_"))
 
         # 聚合项的锥约束: || [π_q[3I1], π_q[3I1+1]] ||_2 ≤ π_q[3I1+2]
-        agg_norm_var = [self.pi[q][3 * self.I1], self.pi[q][3 * self.I1 + 1]]
-        agg_rhs_var = self.pi[q][3 * self.I1 + 2]
-        self.model.addQConstr(gp.quicksum(v * v for v in agg_norm_var) <= agg_rhs_var * agg_rhs_var, name=f"qconstr_norm_q{q}_agg".replace(" ", "_"))
+        agg_norm_var = [self.pi[q][3 * self.I1+1], self.pi[q][3 * self.I1 + 2]]
+        agg_rhs_var = self.pi[q][3 * self.I1]
+        self.add_soc_constraint(t_var=agg_rhs_var, y_vars=agg_norm_var, name=f"qconstr_norm_q{q}_agg".replace(" ", "_"))
+
+    def add_soc_constraint(self, t_var, y_vars, name):
+            """
+            添加二阶锥约束: ||y||_2 <= t
+
+            参数:
+                t_var_idx (int): 标量变量 t 的 MOSEK 变量索引（必须是单个整数）
+                y_var_indices (list of int): 向量 y 的 MOSEK 变量索引列表，如 [y0, y1, ..., y_{n-1}]
+
+            效果:
+                向 self.model 添加一个标准二次锥约束：
+                    [t, y0, y1, ..., y_{n-1}] ∈ Q^{n+1}
+            """
+            n = len(y_vars)
+            if n == 0:
+                raise ValueError("y_var_indices cannot be empty")
+
+            # 添加二阶锥约束: ||y||_2 <= t
+            # 锥约束: ||[π[3i], π[3i+1]]||_2 <= π[3i+2]
+            self.model.addQConstr(gp.quicksum(v * v for v in y_vars) <= t_var * t_var, name=name)
 
     # ---------------- Solve & extract ----------------
     @timeit_if_debug
