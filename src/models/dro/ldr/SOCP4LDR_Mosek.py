@@ -162,8 +162,8 @@ class SOCP4LDR_Mosek(ModelBuilder):
         # 2) LDR: delta & R 关系（添加 Δ = 0/ R = 0 约束）
         self.set_delta_and_R()
         # # 3) 对每个 q: 构造 alpha/gamma，并添加 SOCP 对偶约束块
-        # for q in self.Q_list:
-        #     self.add_SOCP_block(q)
+        for q in self.Q_list:
+            self.add_SOCP_block(q)
 
     def add_first_stage_constraints(self):
         """
@@ -315,7 +315,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
             self.add_soc_constraint(self.pi_idx[q][3*i], [self.pi_idx[q][3*i+1], self.pi_idx[q][3*i+2]])
 
         # 聚合锥
-        self.add_soc_constraint(self.pi_idx[q][3*self.I1], [self.pi_idx[q][3*self.I1+1]])
+        self.add_soc_constraint(self.pi_idx[q][3*self.I1], [self.pi_idx[q][3*self.I1+1], self.pi_idx[q][3*self.I1+2]])
 
     def add_soc_constraint(self, t_var_idx, y_var_indices):
         """
