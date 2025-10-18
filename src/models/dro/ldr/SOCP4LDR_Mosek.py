@@ -162,8 +162,8 @@ class SOCP4LDR_Mosek(ModelBuilder):
         # 2) LDR: delta & R 关系（添加 Δ = 0/ R = 0 约束）
         self.set_delta_and_R()
         # # 3) 对每个 q: 构造 alpha/gamma，并添加 SOCP 对偶约束块
-        for q in self.Q_list:
-            self.add_SOCP_block(q)
+        # for q in self.Q_list:
+        #     self.add_SOCP_block(q)
 
     def add_first_stage_constraints(self):
         """
@@ -228,11 +228,11 @@ class SOCP4LDR_Mosek(ModelBuilder):
         # (14): R0 - sum_{t'<t} a sum_p p G0 - Y = - sum_{t'<t} (d0 + a p_hat)
         vars_ = [self.R0_idx[(phi, t)], self.Y_idx[phi]]
         coeffs = [1.0, -1.0]
-        rhs = 0.0       # - sum_{t'<t} (d0 + a p_hat)
+        constant = 0.0       # - sum_{t'<t} (d0 + a p_hat)
         for tp in self.t_list:
                         if tp < t:
                             d0_val = self.d_0_phi_t.get((phi, tp), 0.0)
-                            rhs -= (d0_val + self.a * self.p_hat.get(phi, 0.0))
+                            constant += (d0_val + self.a * self.p_hat.get(phi, 0.0))
                             for p in self.p_list:
                                 vars_.append(self.G0_idx[(phi, tp, p)])
                                 coeffs.append(-self.a * p)
@@ -241,24 +241,24 @@ class SOCP4LDR_Mosek(ModelBuilder):
         self.model.appendcons(1)
         con_idx = self.model.getnumcon() - 1
         self.model.putarow(con_idx, vars_, coeffs)
-        self.model.putconbound(con_idx, mosek.boundkey.fx, rhs, rhs)
+        self.model.putconbound(con_idx, mosek.boundkey.fx, -constant, -constant)
 
     def add_delta_z_eq_0(self, phi, t):
                     for i in range(self.I1):
                         vars_ = [self.Rz_idx[(phi, t, i)]]
                         coeffs = [1.0]
-                        rhs = 0.0
+                        constant = 0.0
                         for tp in self.t_list:
                             if tp < t:
                                 dz_val = self.d_z_phi_t_i.get((phi, tp, i), 0.0)
-                                rhs += dz_val
+                                constant += dz_val
                                 for p in self.p_list:
                                     vars_.append(self.Gz_idx[(phi, tp, p, i)])
                                     coeffs.append(-self.a * p)
                         self.model.appendcons(1)
                         con_idx = self.model.getnumcon() - 1
                         self.model.putarow(con_idx, vars_, coeffs)
-                        self.model.putconbound(con_idx, mosek.boundkey.fx, rhs, rhs)
+                        self.model.putconbound(con_idx, mosek.boundkey.fx, -constant, -constant)
 
     def add_delta_u_eq_0(self, phi, t):
                     for k in range(self.I1):
@@ -560,15 +560,249 @@ class SOCP4LDR_Mosek(ModelBuilder):
         self.print_model_status()
 
     def get_solution(self):
-        """提取解"""
-        sol = {}
+        """
+        从已成功求解的 SOCP4LDR_Mosek 实例中提取所有变量的解。
+
+        该函数严格遵循 Manuscript_XX_20250904 -LJ.pdf 附录 D 中的变量定义。
+
+        参数:
+        - socp_instance: 已调用 solve() 并成功求解的 SOCP4LDR_Mosek 类实例。
+
+        返回:
+        - solutions: 一个包含所有解的嵌套字典。
+        """
+        # 检查求解状态
+        status = self.get_status()
+        if status != "OPTIMAL":
+            raise ValueError(f"Model has not been solved to optimality. Current status: {status}")
+
+        # 获取原始解向量
         xx = [0.0] * self._next_var
         self.model.getxx(mosek.soltype.itr, xx)
 
-        sol['X'] = {phi: xx[self.X_idx[phi]] for phi in self.phi_list}
-        sol['Y'] = {phi: xx[self.Y_idx[phi]] for phi in self.phi_list}
-        sol['obj'] = self.model.getprimalobj(mosek.soltype.itr)
-        return sol
+        solutions = {}
+
+        # --- 1. 提取第一阶段变量 ---
+        solutions['X'] = {phi: xx[self.X_idx[phi]] for phi in self.phi_list}
+        solutions['Y'] = {phi: xx[self.Y_idx[phi]] for phi in self.phi_list}
+
+        # --- 2. 提取第二阶段对偶变量 (r, s, t, l) ---
+        solutions['r'] = xx[self.r_idx]
+        solutions['s'] = [xx[self.s_idx[i]] for i in range(self.I1)]
+        solutions['t'] = [xx[self.t_idx[k]] for k in range(self.I1)]
+        solutions['l'] = xx[self.l_idx]
+
+        # --- 3. 提取 LDR 系数 (G 和 R) ---
+        solutions['G0'] = {}
+        solutions['Gz'] = {}
+        solutions['Gu'] = {}
+        solutions['R0'] = {}
+        solutions['Rz'] = {}
+        solutions['Ru'] = {}
+
+        for phi in self.phi_list:
+            for t in self.t_list:
+                for p in self.p_list:
+                    solutions['G0'][(phi, t, p)] = xx[self.G0_idx[(phi, t, p)]]
+                    for i in range(self.I1):
+                        solutions['Gz'][(phi, t, p, i)] = xx[self.Gz_idx[(phi, t, p, i)]]
+                    for k in range(self.I1):
+                        solutions['Gu'][(phi, t, p, k)] = xx[self.Gu_idx[(phi, t, p, k)]]
+
+                solutions['R0'][(phi, t)] = xx[self.R0_idx[(phi, t)]]
+                for i in range(self.I1):
+                    solutions['Rz'][(phi, t, i)] = xx[self.Rz_idx[(phi, t, i)]]
+                for k in range(self.I1):
+                    solutions['Ru'][(phi, t, k)] = xx[self.Ru_idx[(phi, t, k)]]
+
+        # --- 4. 提取对偶变量 pi_q ---
+        solutions['pi'] = {}
+        for q in self.Q_list:
+            solutions['pi'][q] = [xx[idx] for idx in self.pi_idx[q]]
+
+        # --- 5. 提取目标函数值 ---
+        solutions['obj_val'] = self.model.getprimalobj(mosek.soltype.itr)
+
+        # --- 6. (可选) 提取 alpha 系数的值 ---
+        # 利用类内已实现的 get_alpha_values 方法
+        solutions['alpha'] = self.get_alpha_values()
+
+        return solutions
+
+    def get_pi_solution(self):
+        """
+        返回对偶变量 π_q 的解（注意：在本模型中 π_q 是原始变量，非 MOSEK 对偶变量）。
+        返回格式: { q: [pi_0, pi_1, ..., pi_{3*I1+2}] for q in Q_list }
+        """
+        status = self.get_status()
+        if status != "OPTIMAL":
+            logging.warning("Model not solved to optimality. Returning None for pi.")
+            return None
+
+        # 获取原始解向量
+        xx = [0.0] * self._next_var
+        self.model.getxx(mosek.soltype.itr, xx)
+
+        pi_solution = {}
+        for q in self.Q_list:
+            pi_vals = [xx[idx] for idx in self.pi_idx[q]]
+            pi_solution[q] = pi_vals
+
+        return pi_solution
+
+    def get_alpha_values(self):
+        """
+        根据 MOSEK 模型的最优解，计算每个 q ∈ Q 对应的 alpha 系数 (alpha0, alpha_z, alpha_u, gamma)。
+
+        返回:
+            alpha_values: dict, key=q, value=dict(alpha0, alpha_z, alpha_u, gamma)
+        """
+        status = self.get_status()
+        if status != "OPTIMAL":
+            logging.warning("Model not solved to optimality. Cannot extract alpha values.")
+            return None
+
+        # 1. 获取所有变量的解
+        xx = [0.0] * self._next_var
+        self.model.getxx(mosek.soltype.itr, xx)
+
+        # 辅助函数：从解向量中获取变量值
+        def get_var_val(name_or_idx):
+            if isinstance(name_or_idx, str):
+                idx = self._var_index[name_or_idx]
+            else:
+                idx = name_or_idx
+            return xx[idx]
+
+        # 2. 提取 Stage II duals
+        r_val = get_var_val(self.r_idx)
+        s_vals = [get_var_val(self.s_idx[i]) for i in range(self.I1)]
+        t_vals = [get_var_val(self.t_idx[k]) for k in range(self.I1)]
+        l_val = get_var_val(self.l_idx)
+
+        # 3. 提取 LDR 系数
+        G0_vals = {}
+        Gz_vals = {}
+        Gu_vals = {}
+        for phi in self.phi_list:
+            for t in self.t_list:
+                for p in self.p_list:
+                    G0_vals[(phi, t, p)] = get_var_val(self.G0_idx[(phi, t, p)])
+                    for i in range(self.I1):
+                        Gz_vals[(phi, t, p, i)] = get_var_val(self.Gz_idx[(phi, t, p, i)])
+                    for k in range(self.I1):
+                        Gu_vals[(phi, t, p, k)] = get_var_val(self.Gu_idx[(phi, t, p, k)])
+
+        R0_vals = {}
+        Rz_vals = {}
+        Ru_vals = {}
+        for phi in self.phi_list:
+            for t in self.t_list:
+                R0_vals[(phi, t)] = get_var_val(self.R0_idx[(phi, t)])
+                for i in range(self.I1):
+                    Rz_vals[(phi, t, i)] = get_var_val(self.Rz_idx[(phi, t, i)])
+                for k in range(self.I1):
+                    Ru_vals[(phi, t, k)] = get_var_val(self.Ru_idx[(phi, t, k)])
+
+        # 4. 初始化结果字典
+        alpha_values = {}
+
+        # --- (1) 'obj' 类型 ---
+        q = 'obj'
+        alpha0_val = r_val - sum(
+            self.c_phi_tp.get((phi, t, p), 0.0) * G0_vals[(phi, t, p)]
+            for phi in self.phi_list for t in self.t_list for p in self.p_list
+        )
+        alpha_z_vals = [
+            s_vals[i] - sum(
+                self.c_phi_tp.get((phi, t, p), 0.0) * Gz_vals[(phi, t, p, i)]
+                for phi in self.phi_list for t in self.t_list for p in self.p_list
+            )
+            for i in range(self.I1)
+        ]
+        alpha_u_vals = [
+            t_vals[k] - sum(
+                self.c_phi_tp.get((phi, t, p), 0.0) * Gu_vals[(phi, t, p, k)]
+                for phi in self.phi_list for t in self.t_list for p in self.p_list
+            )
+            for k in range(self.I1)
+        ]
+        gamma_val = l_val
+
+        alpha_values[q] = {
+            'alpha0': alpha0_val,
+            'alpha_z': alpha_z_vals,
+            'alpha_u': alpha_u_vals,
+            'gamma': gamma_val
+        }
+
+        # --- (2) 其他 q 类型 ---
+        for phi in self.phi_list:
+            for t in self.t_list:
+                # (a) 'svc'
+                q = ('svc', phi, t)
+                alpha0_val = (
+                    self.d_0_phi_t.get((phi, t), 0.0)
+                    - self.a * sum(p * G0_vals[(phi, t, p)] for p in self.p_list)
+                    - R0_vals[(phi, t)]
+                    + self.a * self.p_hat.get(phi, 0.0)
+                )
+                alpha_z_vals = [
+                    self.d_z_phi_t_i.get((phi, t, i), 0.0)
+                    - self.a * sum(p * Gz_vals[(phi, t, p, i)] for p in self.p_list)
+                    - Rz_vals[(phi, t, i)]
+                    for i in range(self.I1)
+                ]
+                alpha_u_vals = [
+                    -self.a * sum(p * Gu_vals[(phi, t, p, k)] for p in self.p_list)
+                    - Ru_vals[(phi, t, k)]
+                    for k in range(self.I1)
+                ]
+                alpha_values[q] = {
+                    'alpha0': alpha0_val,
+                    'alpha_z': alpha_z_vals,
+                    'alpha_u': alpha_u_vals,
+                    'gamma': 0.0
+                }
+
+                # (b) 'mix'
+                q = ('mix', phi, t)
+                alpha0_val = sum(G0_vals[(phi, t, p)] for p in self.p_list) - 1.0
+                alpha_z_vals = [
+                    sum(Gz_vals[(phi, t, p, i)] for p in self.p_list)
+                    for i in range(self.I1)
+                ]
+                alpha_u_vals = [
+                    sum(Gu_vals[(phi, t, p, k)] for p in self.p_list)
+                    for k in range(self.I1)
+                ]
+                alpha_values[q] = {
+                    'alpha0': alpha0_val,
+                    'alpha_z': alpha_z_vals,
+                    'alpha_u': alpha_u_vals,
+                    'gamma': 0.0
+                }
+
+                # (c) 'ng'
+                for p in self.p_list:
+                    q = ('ng', phi, t, p)
+                    alpha_values[q] = {
+                        'alpha0': -G0_vals[(phi, t, p)],
+                        'alpha_z': [-Gz_vals[(phi, t, p, i)] for i in range(self.I1)],
+                        'alpha_u': [-Gu_vals[(phi, t, p, k)] for k in range(self.I1)],
+                        'gamma': 0.0
+                    }
+
+                # (d) 'nr'
+                q = ('nr', phi, t)
+                alpha_values[q] = {
+                    'alpha0': -R0_vals[(phi, t)],
+                    'alpha_z': [-Rz_vals[(phi, t, i)] for i in range(self.I1)],
+                    'alpha_u': [-Ru_vals[(phi, t, k)] for k in range(self.I1)],
+                    'gamma': 0.0
+                }
+
+        return alpha_values
 
     def get_status(self):
         """

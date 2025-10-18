@@ -5,7 +5,6 @@ import numpy as np
 import os
 import sys
 
-
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 print(PROJECT_ROOT)
 sys.path.insert(0, PROJECT_ROOT)
@@ -46,7 +45,6 @@ if __name__ == "__main__":
             seed=42  # 固定种子以复现结果
         )
 
-
     # socp = SOCP4LDR(model_params=model_params)
     socp = SOCP4LDR_Mosek(model_params=model_params)
 
@@ -59,4 +57,4 @@ if __name__ == "__main__":
     socp.write()
 
     # check feasibility
-    # run_all_validations(socp.get_solution(), model_params, socp.get_pi_solution())
+    run_all_validations(socp.get_solution(), model_params)
