@@ -1,15 +1,14 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
-from ..network.arc import Arc
-from .container_path import ContainerPath
+from typing import List
+from src.network.arc import Arc
 
 @dataclass
 class LadenPath:
     """
     重箱路径类
-    
+
     存储重箱路径相关的属性和信息
-    
+
     属性:
         container_path: 集装箱路径对象
         request_id: 请求ID
@@ -28,7 +27,7 @@ class LadenPath:
         arcs_id: 弧ID列表
         arcs: 弧对象列表
     """
-    def __init__(self, 
+    def __init__(self,
                  request_id: int,
                  origin_port: str,
                  origin_time: int,

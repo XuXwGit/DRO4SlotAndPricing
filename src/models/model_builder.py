@@ -49,6 +49,7 @@ class VType:
 class ModelBuilder:
     def __init__(self, info="", solver="gurobi"):
         self.info = info
+        self.solver = solver
         self.obj_val = 0
         self.solutions = {}
         self.INF =  100000000 # 100000000         #float('inf')
@@ -88,7 +89,7 @@ class ModelBuilder:
         self.t_list = model_params['t_list']
         self.p_list = model_params['p_list']
         self.p_hat = model_params['p_hat']
-        self.c_phi_tp = model_params['c_phi_tp']
+        self.c_phi_t_p = model_params['c_phi_tp']
         self.t_d_phi = model_params['t_d_phi']
 
         # 不确定性参数
@@ -220,18 +221,18 @@ class ModelBuilder:
         self.model_params['h'] = self.h
 
         # --- 调试输出 ---
-        print("\n--- DEBUG: Matrix Structure ---")
-        print("C matrix (shape: {}):".format(self.C.shape))
-        print(self.C)
-        print("D matrix (shape: {}):".format(self.D.shape))
-        print(self.D)
-        print("d vector:", self.d.shape)
-        print(self.d)
-        print("h vector:", self.h.shape)
-        print(self.h)
-        print("E matrix (shape: {}):".format(self.E.shape))
-        print(self.E)
-        print("--- END DEBUG ---\n")
+        # print("\n--- DEBUG: Matrix Structure ---")
+        # print("C matrix (shape: {}):".format(self.C.shape))
+        # print(self.C)
+        # print("D matrix (shape: {}):".format(self.D.shape))
+        # print(self.D)
+        # print("d vector:", self.d.shape)
+        # print(self.d)
+        # print("h vector:", self.h.shape)
+        # print(self.h)
+        # print("E matrix (shape: {}):".format(self.E.shape))
+        # print(self.E)
+        # print("--- END DEBUG ---\n")
 
     @timeit_if_debug
     def build_model(self):
@@ -245,6 +246,8 @@ class ModelBuilder:
 
             self.add_constraints()
 
+            self.update()
+
             self.print_model_info()
         except Exception as e:
             logging.error(f"构建模型时发生错误：{e}")
@@ -254,6 +257,13 @@ class ModelBuilder:
     =========================================
     以下成员函数需要子类实现
     """
+    def update(self):
+        """ 更新模型 """
+        if self.solver == 'gurobi':
+            self.model.update()
+        else:
+            pass
+
     @timeit_if_debug
     def create_variables(self):
         """ 创建模型变量 """
@@ -293,7 +303,9 @@ class ModelBuilder:
 
     @timeit_if_debug
     def solve(self):
-        """ 求解模型 """
+        """
+        求解模型
+        """
         self.model.optimize()
         self.print_model_status()
         self.extract_solution()

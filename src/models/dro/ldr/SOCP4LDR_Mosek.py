@@ -106,9 +106,9 @@ class SOCP4LDR_Mosek(ModelBuilder):
         self.model.appendvars(self.num_vars)
 
         # 变量上下界
-        self.set_variable_bounds()
+        self._set_variable_bounds()
 
-    def set_variable_bounds(self):
+    def _set_variable_bounds(self):
     # 设置所有变量为自由变量（lb=-inf, ub=+inf）
         for i in range(self.num_vars):
             self.model.putvarbound(i, mosek.boundkey.fr, -0.0, +0.0)
@@ -143,7 +143,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
             c[self.t_idx[k]] = self.sigma_sq[k]
         c[self.l_idx] = self.cost_cov
 
-        # self.model.putclist(range(self._next_var), c)
+        self.model.putclist(range(self._next_var), c)
         self.model.putobjsense(mosek.objsense.maximize)
 
     @timeit_if_debug
@@ -204,7 +204,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
             t_deadline = self.t_d_phi.get(phi, 0)  # 获取该路径的需求截止时间
             for t in self.t_list:
                 if 1 <= t <= t_deadline:
-                    print(f"  -> Adding Δ=0 constraints for (φ ={phi}, t={t})")
+                    # print(f"  -> Adding Δ=0 constraints for (φ ={phi}, t={t})")
                     # (14): R0 - sum_{t'<t} a sum_p p G0 - Y = - sum_{t'<t} (d0 + a p_hat)
                     self.add_delta0_eq_0(phi, t)
 
@@ -216,7 +216,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
 
                 elif t > t_deadline:
                     # (17)–(19): R = 0
-                    print(f"  -> Adding R=0 constraints for (φ ={phi}, t={t})")
+                    # print(f"  -> Adding R=0 constraints for (φ ={phi}, t={t})")
                     self.add_R_0_eq_0(phi, t)
                     # R^z = 0
                     self.add_R_z_eq_0(phi, t)
@@ -391,7 +391,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
             for phi in self.phi_list:
                 for t in self.t_list:
                     for p in self.p_list:
-                        c_val = self.c_phi_tp.get((phi, t, p), 0.0)
+                        c_val = self.c_phi_t_p.get((phi, t, p), 0.0)
                         if c_val != 0:
                             var = self.G0_idx[(phi, t, p)]
                             coeffs0[var] = coeffs0.get(var, 0.0) - c_val
@@ -404,7 +404,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
                 for phi in self.phi_list:
                     for t in self.t_list:
                         for p in self.p_list:
-                            c_val = self.c_phi_tp.get((phi, t, p), 0.0)
+                            c_val = self.c_phi_t_p.get((phi, t, p), 0.0)
                             if c_val != 0:
                                 var = self.Gz_idx[(phi, t, p, i)]
                                 coeffs_z[var] = coeffs_z.get(var, 0.0) - c_val
@@ -417,7 +417,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
                 for phi in self.phi_list:
                     for t in self.t_list:
                         for p in self.p_list:
-                            c_val = self.c_phi_tp.get((phi, t, p), 0.0)
+                            c_val = self.c_phi_t_p.get((phi, t, p), 0.0)
                             if c_val != 0:
                                 var = self.Gu_idx[(phi, t, p, k)]
                                 coeffs_u[var] = coeffs_u.get(var, 0.0) - c_val
@@ -538,10 +538,20 @@ class SOCP4LDR_Mosek(ModelBuilder):
         self._add_le_constraint(vars_, coeffs_, -const)
 
 
-    def solve(self, time_limit: float = 300.0, rel_gap: float = 1e-3, verbose: bool = True):
+    def solve(self, time_limit: float = 300.0, rel_gap: float = 1e-8, verbose: bool = True):
         # 设置求解参数
         self.model.putdouparam(mosek.dparam.intpnt_co_tol_rel_gap, rel_gap)
         self.model.putdouparam(mosek.dparam.optimizer_max_time, time_limit)
+        # 启用内点法后的基识别
+        self.model.putintparam(mosek.iparam.intpnt_basis, mosek.basindtype.always)
+
+        # （可选）收紧基解的可行性容差
+        # 原始可行性容差
+        self.model.putdouparam(mosek.dparam.intpnt_tol_pfeas, 1e-10)
+        # 对偶可行性容差
+        self.model.putdouparam(mosek.dparam.intpnt_tol_dfeas, 1e-10)
+        # 相对对偶间隙容差（关键！）
+        self.model.putdouparam(mosek.dparam.intpnt_tol_rel_gap, 1e-10)
 
         if verbose:
             # 启用日志输出到终端
@@ -557,6 +567,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
         if verbose:
             self.model.solutionsummary(mosek.streamtype.log)
 
+        self.solutions = self.get_solution()
         self.print_model_status()
 
     def get_solution(self):
@@ -574,10 +585,11 @@ class SOCP4LDR_Mosek(ModelBuilder):
         # 检查求解状态
         status = self.get_status()
         if status != "OPTIMAL":
-            raise ValueError(f"Model has not been solved to optimality. Current status: {status}")
+            logging.warning(f"Model has not been solved to optimality. Current status: {status}")
 
         # 获取原始解向量
         xx = [0.0] * self._next_var
+        # LP 有基解(soltype.itr / soltype.bas)，SOCP只有内点解 (soltype.itr)
         self.model.getxx(mosek.soltype.itr, xx)
 
         solutions = {}
@@ -657,11 +669,6 @@ class SOCP4LDR_Mosek(ModelBuilder):
         返回:
             alpha_values: dict, key=q, value=dict(alpha0, alpha_z, alpha_u, gamma)
         """
-        status = self.get_status()
-        if status != "OPTIMAL":
-            logging.warning("Model not solved to optimality. Cannot extract alpha values.")
-            return None
-
         # 1. 获取所有变量的解
         xx = [0.0] * self._next_var
         self.model.getxx(mosek.soltype.itr, xx)
@@ -710,19 +717,19 @@ class SOCP4LDR_Mosek(ModelBuilder):
         # --- (1) 'obj' 类型 ---
         q = 'obj'
         alpha0_val = r_val - sum(
-            self.c_phi_tp.get((phi, t, p), 0.0) * G0_vals[(phi, t, p)]
+            self.c_phi_t_p.get((phi, t, p), 0.0) * G0_vals[(phi, t, p)]
             for phi in self.phi_list for t in self.t_list for p in self.p_list
         )
         alpha_z_vals = [
             s_vals[i] - sum(
-                self.c_phi_tp.get((phi, t, p), 0.0) * Gz_vals[(phi, t, p, i)]
+                self.c_phi_t_p.get((phi, t, p), 0.0) * Gz_vals[(phi, t, p, i)]
                 for phi in self.phi_list for t in self.t_list for p in self.p_list
             )
             for i in range(self.I1)
         ]
         alpha_u_vals = [
             t_vals[k] - sum(
-                self.c_phi_tp.get((phi, t, p), 0.0) * Gu_vals[(phi, t, p, k)]
+                self.c_phi_t_p.get((phi, t, p), 0.0) * Gu_vals[(phi, t, p, k)]
                 for phi in self.phi_list for t in self.t_list for p in self.p_list
             )
             for k in range(self.I1)
@@ -823,10 +830,9 @@ class SOCP4LDR_Mosek(ModelBuilder):
             return "INFEASIBLE"
         elif prosta == mosek.prosta.dual_infeas:
             return "UNBOUNDED"
-        elif solsta in [mosek.solsta.near_optimal, mosek.solsta.unknown]:
+        elif solsta == mosek.solsta.unknown:
             # 可能是时间限制、数值问题等
-            # 检查是否达到时间限制（需用户自行记录）
-            return "TIME_LIMIT_OR_NEAR_OPTIMAL"
+            return "UNKNOWN"
         else:
             return f"OTHER (prosta={prosta}, solsta={solsta})"
 
@@ -857,7 +863,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
             self.model.writedata(file_name + '_unbounded.ptf')
             logging.warning("模型无界 (Dual Infeasible)")
 
-        elif solsta in [mosek.solsta.near_optimal, mosek.solsta.unknown]:
+        elif solsta == mosek.solsta.unknown:
             # 可能是时间限制或数值问题
             try:
                 obj_val = self.model.getprimalobj(mosek.soltype.itr)

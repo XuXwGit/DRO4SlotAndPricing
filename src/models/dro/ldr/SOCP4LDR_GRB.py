@@ -24,6 +24,9 @@ class SOCP4LDR(ModelBuilder):
       - 利用对偶与锥对偶转换，得到 π_q 等对偶变量，并构造 SOCP 块
     """
     def __init__(self, model_params=None) -> None:
+        """
+        @param model_params: 模型参数字典
+        """
         super().__init__(info="SOCP4LDR", solver="gurobi")
         self.set_model_params(model_params)
 
@@ -42,14 +45,14 @@ class SOCP4LDR(ModelBuilder):
     @timeit_if_debug
     def create_variables(self):
         """
-        创建决策变量（仅变量创建，不添加约束）：
+        创建决策变量：
           - 第一阶段: X[φ], Y[φ] (>=0)
           - 第二阶段对偶: r, s_i, t_i (<=0), l (<=0)
           - 线性决策规则系数: G0[φ,t,p] (prob alloc coeff), Gz[φ,t,p,i], Gu[φ,t,p,k]
           - R 系数: R0[φ,t], Rz[φ,t,i], Ru[φ,t,k]
           - π_q: 对于每个 q, 创建 2*I1+2 个对偶分量 self.pi[q][0..2I1+1]
         """
-        # Stage I variables (nonnegative)  (非负，将被 set_X_Y_value 固定)
+        # Stage I variables (nonnegative)  (非负)
         self.X = self.model.addVars(self.phi_list, lb=0.0, vtype=VType.CONTINUOUS, name="X")
         self.Y = self.model.addVars(self.phi_list, lb=0.0, vtype=VType.CONTINUOUS, name="Y")
 
@@ -89,7 +92,7 @@ class SOCP4LDR(ModelBuilder):
         # π_q variables: for each q an array of length 3*I1 + 3
         self.pi = {}
         for q in self.Q_list:
-            # addVars returns a tupledict indexed by integers 0..(2I1+1)
+            # addVars returns a tuple dict indexed by integers 0..(2I1+1)
             self.pi[q] = self.model.addVars(3 * self.I1 + 3, lb=-self.INF , ub=self.INF , vtype=VType.CONTINUOUS, name=f"pi_{q}".replace(" ", "_"))
 
         # alpha, gamma, delta — **作为表达式容器**（LinExpr）
@@ -252,21 +255,21 @@ class SOCP4LDR(ModelBuilder):
         if q == 'obj':
             # α0_obj = r - Σ c_{φtp} * G0_{φtp}
             self.alpha0[q] = self.r - gp.quicksum(
-                self.c_phi_tp.get((phi, t, p), 0.0) * self.G0[(phi, t, p)]
+                self.c_phi_t_p.get((phi, t, p), 0.0) * self.G0[(phi, t, p)]
                 for phi in self.phi_list
                 for t in self.t_list
                 for p in self.p_list
             )
             # α_z^{obj}_i = s - Σ c * Gz
             self.alpha_z[q] = [self.s[i] -gp.quicksum(
-                    self.c_phi_tp.get((phi, t, p), 0.0) * self.Gz[(phi, t, p, i)]
+                    self.c_phi_t_p.get((phi, t, p), 0.0) * self.Gz[(phi, t, p, i)]
                     for phi in self.phi_list
                     for t in self.t_list
                     for p in self.p_list
                 ) for i in range(self.I1)]
             # α_u^{obj}_k = t - Σ c * Gu
             self.alpha_u[q] = [self.t[k] -gp.quicksum(
-                    self.c_phi_tp.get((phi, t, p), 0.0) * self.Gu[(phi, t, p, k)]
+                    self.c_phi_t_p.get((phi, t, p), 0.0) * self.Gu[(phi, t, p, k)]
                     for phi in self.phi_list for t in self.t_list for p in self.p_list
                 ) for k in range(self.I1)]
             # γ_obj = l

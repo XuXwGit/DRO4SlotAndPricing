@@ -1,3 +1,4 @@
+import math
 from random import random
 from typing import Any, Dict
 
@@ -39,7 +40,7 @@ def construct_model_params(data_manager: 'DataManager') -> Dict[str, Any]:
         for request in data_manager.requests:
             # 假设 Request 类有一个 price_set 属性，它是一个列表
             for path in request.laden_path_set.values():
-                p_list[path.id] = getattr(request, 'price_set', [request.long_haul_price * (1 + 0.1 * i) - path.path_cost for i in range(10)])
+                p_list[path.id] = getattr(request, 'price_set', [math.ceil(request.long_haul_price * (1 + 0.1 * i) - path.path_cost) for i in range(10)])
 
         # 4. 提取基准价格 p_hat
         p_hat = {}
@@ -47,7 +48,7 @@ def construct_model_params(data_manager: 'DataManager') -> Dict[str, Any]:
             for path in request.laden_path_set.values():
                 p_hat[path.id] = request.long_haul_price - path.path_cost
 
-        # 7. 提取基础需求 d_0_phi_t
+        # 5. 提取基础需求 d_0_phi_t
         d_0_phi_t = {}
         for request in data_manager.requests:
             d0 = getattr(request, 'mean_demand', 10.0) + getattr(request, 'variance_demand', 10.0)
@@ -60,10 +61,10 @@ def construct_model_params(data_manager: 'DataManager') -> Dict[str, Any]:
         for cp in data_manager.container_paths:
             t_d_phi[cp.container_path_id] = getattr(cp, 'origin_time', data_manager.time_horizon)
 
-        # 9. 提取价格敏感度 a
+        # 7. 提取价格敏感度 a
         a = getattr(data_manager, 'price_sensitivity', 1.0)
 
-        # 5. 提取 per-period  revenue:  c_phi_tp
+        # 8. 提取 per-period  revenue:  c_phi_tp
         # c_φtp = p Kφt = p dφt − a(p − pˆφ) = p dφt − a p^2 + a p pˆφ
         c_phi_tp = {}
         for request in data_manager.requests:
@@ -75,7 +76,7 @@ def construct_model_params(data_manager: 'DataManager') -> Dict[str, Any]:
                         else:
                             c_phi_tp[(cp.container_path_id, t, p)] = 0
 
-        # 8. 提取需求对 z 的敏感度 d_z_phi_t_i
+        # 9. 提取需求对 z 的敏感度 d_z_phi_t_i
         # 不确定性维度 I1 设为港口数量
         I1 = len(data_manager.port_set) if data_manager.port_set else 2
         d_z_phi_t_i = {}
@@ -91,6 +92,7 @@ def construct_model_params(data_manager: 'DataManager') -> Dict[str, Any]:
         mu = data_manager.data.get('mu', [1.0] * I1)
         sigma_sq = data_manager.data.get('sigma_sq', [1.0] * I1)
         Sigma = data_manager.data.get('Sigma', [[1.0 if i == j else 0.0 for j in range(I1)] for i in range(I1)])
+        cost_cov = data_manager.data.get('cost_cov', [[1.0 if i == j else 0.0 for j in range(I1)] for i in range(I1)])
 
         # 11. 构建 model_params 字典
         model_params = {
@@ -107,6 +109,7 @@ def construct_model_params(data_manager: 'DataManager') -> Dict[str, Any]:
             'mu': mu,
             'sigma_sq': sigma_sq,
             'Sigma': Sigma,
+            'cost_cov': cost_cov,
             "paths": paths,
             "A_prime": A_prime,
         }
@@ -152,7 +155,7 @@ def generate_feasible_test_case(
     for phi in phi_list:
         for t in t_list:
             if t <= t_d_phi[phi]:
-                d_val = np.random.uniform(base_demand_range[0], base_demand_range[1])
+                d_val = math.floor(np.random.normal(base_demand_range[0], base_demand_range[1]))
                 d_0_phi_t[(phi, t)] = d_val
                 max_demand = max(max_demand, d_val)
             else:
@@ -166,14 +169,14 @@ def generate_feasible_test_case(
         edge = (f"N{i}", f"N{i+1}")
         paths[phi] = [edge]
         # 容量 = 最大需求 × 安全因子
-        A_prime[edge] = max_demand * safety_factor
+        A_prime[edge] = math.floor(max_demand * safety_factor)
 
-    # --- 5. 成本系数 ---
-    c_phi_tp = {}
+    # --- 5. 收益系数 c_phi_t_p = p K_phi_t = p[d_phi_t - a(p - p_hat)] ---
+    c_phi_t_p = {}
     for phi in phi_list:
         for t in t_list:
             for p in p_list:
-                c_phi_tp[(phi, t, p)] = p * cost_ratio
+                c_phi_t_p[(phi, t, p)] = p * (d_0_phi_t[(phi, t)] - demand_sensitivity * (p - p_hat[phi]))
 
     # --- 6. 不确定性参数 (减小方差) ---
     mu = np.zeros(uncertainty_dim)
@@ -190,7 +193,7 @@ def generate_feasible_test_case(
         for t in t_list:
             for i in range(uncertainty_dim):
                 # 波动与基础需求成比例
-                d_z_phi_t_i[(phi, t, i)] = 0.1 * d_0_phi_t[(phi, t)]
+                d_z_phi_t_i[(phi, t, i)] = math.floor(0.1 * d_0_phi_t[(phi, t)])
 
     # --- 8. 返回结果 ---
     test_case = {
@@ -199,7 +202,7 @@ def generate_feasible_test_case(
         "t_list": t_list,
         "p_list": p_list,
         "p_hat": p_hat,
-        "c_phi_tp": c_phi_tp,
+        "c_phi_tp": c_phi_t_p,
         "t_d_phi": t_d_phi,
         "mu": mu,
         "sigma_sq": sigma_sq,

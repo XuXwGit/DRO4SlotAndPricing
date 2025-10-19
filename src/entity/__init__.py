@@ -16,24 +16,18 @@ import sys
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.entity.port import Port
-from src.entity.vessel_path import VesselPath
-from src.entity.laden_path import LadenPath
-from src.entity.empty_path import EmptyPath
-from src.entity.request import Request
-from src.entity.ship_route import ShipRoute
-from src.entity.container_path import ContainerPath
-from src.entity.vessel_type import VesselType
-from src.entity.od_range import ODRange
+from .port import Port
+from .vessel_type import VesselType
+from .ship_route import ShipRoute
+from .scenario import Scenario
+from .request import Request
+from .container_path import ContainerPath
+from .laden_path import LadenPath
+from .empty_path import EmptyPath
+from .vessel_path import VesselPath
+from .od_range import ODRange
 
 __all__ = [
-    'Port',
-    'VesselPath',
-    'LadenPath',
-    'EmptyPath',
-    'Request',
-    'ShipRoute',
-    'ContainerPath',
-    'VesselType',
-    'ODRange'
-] 
+    'Port', 'VesselType', 'ShipRoute', 'Scenario', 'Request',
+    'ContainerPath', 'LadenPath', 'EmptyPath', 'VesselPath', 'ODRange'
+]

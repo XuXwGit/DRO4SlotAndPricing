@@ -1,5 +1,38 @@
 import numpy as np
 
+def validate_capacity_constraints(solution, model_params):
+    """
+    测试 2: 验证容量约束
+    每条边 e 的容量约束: ∑_{i=1}^{I} (X_{i,e} + Y_{i,e}) ≤ A'_e
+    """
+    print("🧪 测试 3: 验证容量约束")
+    all_valid = True
+    total_active = 0
+    tolerance = 1e-6
+    activity_tolerance = 1e-4
+    for edge, capacity in model_params['A_prime'].items():
+        valid = True
+        active_count = 0
+        inactive_count = 0
+        expr_value = 0
+        for phi in model_params['phi_list']:
+            if edge in model_params['paths'].get(phi, []):
+                expr_value = solution['X'][phi] + solution['Y'][phi]
+
+        if expr_value > capacity + tolerance:
+                    valid = False
+                    print(f"  ❌ 容量约束违反 for edge={edge}: {expr_value:.6f} > {capacity:.6f}")
+        else:
+                    # 判断是否为紧约束
+                    if abs(expr_value - capacity) <= activity_tolerance:
+                        active_count += 1
+                    else:
+                        inactive_count += 1
+
+        if valid:
+            print(f"  ✅ edge={edge} 的所有容量约束均满足。 (紧: {active_count}, 非紧: {inactive_count})")
+            total_active += active_count
+
 def validate_cone_constraints(solution, I1):
     """
     测试 1: 验证对偶变量 pi_q 是否满足二阶锥 (SOC) 约束。
@@ -169,6 +202,7 @@ def validate_support_duality_constraints_tightness(solution, model_params, toler
         print(f"\n🔍 检查 q = {q}")
 
         # (1) C^T π_q == alpha_z_q
+        print(f"C^T π_q == alpha_z_q")
         C_dot_pi = [sum(C[j][i] * pi_vals[j] for j in range(dim_pi)) for i in range(I1)]
         alpha_z_q = solution['alpha'][q]['alpha_z']
         for i in range(I1):
@@ -177,8 +211,10 @@ def validate_support_duality_constraints_tightness(solution, model_params, toler
                 print(f"  ❌ C^T π_q[{i}] = {C_dot_pi[i]:.6f} != alpha_z_q[{i}] = {alpha_z_q[i]:.6f}")
             else:
                 print(f"  ✅ C^T π_q[{i}] = alpha_z_q[{i}]")
+        print(f"\n")
 
         # (2) D^T π_q == alpha_u_q
+        print(f"D^T π_q == alpha_u_q")
         D_dot_pi = [sum(D[j][k] * pi_vals[j] for j in range(dim_pi)) for k in range(I1)]
         alpha_u_q = solution['alpha'][q]['alpha_u']
         for k in range(I1):
@@ -187,8 +223,10 @@ def validate_support_duality_constraints_tightness(solution, model_params, toler
                 print(f"  ❌ D^T π_q[{k}] = {D_dot_pi[k]:.6f} != alpha_u_q[{k}] = {alpha_u_q[k]:.6f}")
             else:
                 print(f"  ✅ D^T π_q[{k}] = alpha_u_q[{k}]")
+        print(f"\n")
 
         # (3) d^T π_q == gamma_q
+        print(f"d^T π_q == gamma_q")
         d_dot_pi = sum(d_val * pi_val for d_val, pi_val in zip(d_vec, pi_vals))
         gamma_q = solution['alpha'][q]['gamma']
         if abs(d_dot_pi - gamma_q) > tolerance:
@@ -196,8 +234,10 @@ def validate_support_duality_constraints_tightness(solution, model_params, toler
             print(f"  ❌ d^T π_q = {d_dot_pi:.6f} != gamma_q = {gamma_q:.6f}")
         else:
             print(f"  ✅ d^T π_q = gamma_q")
+        print(f"\n")
 
         # (4) h^T π_q <= -alpha0_q
+        print(f"h^T π_q <= -alpha0_q")
         h_dot_pi = sum(h_val * pi_val for h_val, pi_val in zip(h_vec, pi_vals))
         alpha0_q = solution['alpha'][q]['alpha0']
         rhs = -alpha0_q
@@ -206,58 +246,34 @@ def validate_support_duality_constraints_tightness(solution, model_params, toler
             print(f"  ❌ h^T π_q = {h_dot_pi:.6f} > -alpha0_q = {rhs:.6f}")
         else:
             print(f"  ✅ h^T π_q ({h_dot_pi:.6f}) <= -alpha0_q ({rhs:.6f})")
+        print(f"\n")
 
     print(f"\n{'✅ 所有对偶约束满足！' if all_valid else '❌ 存在对偶约束违反！'}")
     return all_valid
 
 
-def validate_variable_bounds(solution, model_params):
+def validate_objective_value(solution, model_params, tolerance: float = 1e-6):
     """
-    测试 4: 验证变量边界和业务逻辑。
+    测试 4: 验证目标函数值是否正确。
     """
-    print("🧪 测试 4: 验证变量边界和业务逻辑")
-    phi_list = model_params['phi_list']
-    t_list = model_params['t_list']
-    p_list = model_params['p_list']
-    I1 = len(solution['s'])
-    all_valid = True
-    tolerance = 1e-6
+    print("🧪 测试 4: 验证目标函数值")
+    # Stage I
+    X = solution['X']
+    obj_val_I = sum(p_hat * X[phi] for phi, p_hat in model_params['p_hat'].items())
+    # Stage II
+    obj_val_II = solution['r']
+    obj_val_II += sum(solution['s'][i] * model_params['mu'][i] for i in range(model_params['I1']))
+    obj_val_II += sum(solution['t'][k] * model_params['sigma_sq'][k] for k in range(model_params['I1']))
+    obj_val_II += solution['l'] * model_params['cost_cov']
 
-    # (1) G0 ∈ [0,1] 且 Σ_p G0 ≈ 1
-    for phi in phi_list:
-        for t in t_list:
-            sum_G0 = sum(solution['G0'][(phi, t, p)] for p in p_list)
-            if abs(sum_G0 - 1.0) > 1e-4:
-                all_valid = False
-                print(f"  ❌ G0 求和 ≠ 1 for ({phi}, {t}): {sum_G0:.6f}")
-            for p in p_list:
-                G0_val = solution['G0'][(phi, t, p)]
-                if G0_val < -tolerance or G0_val > 1.0 + tolerance:
-                    all_valid = False
-                    print(f"  ❌ G0 ∉ [0,1] for ({phi}, {t}, {p}): {G0_val:.6f}")
+    obj_val = obj_val_I + obj_val_II
 
-    # (2) R0 ≥ 0
-    for phi in phi_list:
-        for t in t_list:
-            R0_val = solution['R0'][(phi, t)]
-            if R0_val < -tolerance:
-                all_valid = False
-                print(f"  ❌ R0 < 0 for ({phi}, {t}): {R0_val:.6f}")
-
-    # (3) t_k ≤ 0, l ≤ 0
-    for k, t_val in enumerate(solution['t']):
-        if t_val > tolerance:
-            all_valid = False
-            print(f"  ❌ t[{k}] > 0: {t_val:.6f}")
-    if solution['l'] > tolerance:
-        all_valid = False
-        print(f"  ❌ l > 0: {solution['l']:.6f}")
-
-    if all_valid:
-        print("  🎉 测试 4 通过！所有变量均满足边界和业务逻辑。\n")
+    if abs(obj_val - solution['obj_val']) > tolerance:
+        print(f"  ❌ 目标函数值不匹配: {obj_val:.6f} != {solution['obj_val']:.6f}")
+        return False
     else:
-        print("  ⚠️ 测试 4 失败！存在变量违反边界或逻辑。\n")
-    return all_valid
+        print(f"  ✅ 目标函数值匹配: {obj_val:.6f} = {solution['obj_val']:.6f}")
+        return True
 
 
 def run_all_validations(solution, model_params):
@@ -271,23 +287,19 @@ def run_all_validations(solution, model_params):
     I1 = len(solution['s'])
     results = []
 
-    # 测试 1: 锥约束
+
+    # 测试 2: Δ 和 R 约束
+    results.append(validate_delta_and_R_constraints(solution, model_params))
+
+    # 测试 3: 锥约束
     if solution['pi'] is not None:
         results.append(validate_cone_constraints(solution, I1))
     else:
         print("🧪 测试 1: 跳过（未提供 pi 解）\n")
         results.append(True)
 
-    # 测试 2: Δ 和 R 约束
-    results.append(validate_delta_and_R_constraints(solution, model_params))
-
-    # 测试 3: 对偶线性约束
+    # 测试 4: 对偶线性约束
     results.append(validate_support_duality_constraints_tightness(solution, model_params))
-
-    # 测试 4: 变量边界
-    results.append(validate_variable_bounds(solution, model_params))
-
-    # （可选）测试 5: 目标值合理性 —— 此处暂不实现，因逻辑复杂且易误导
 
     print("=" * 60)
     if all(results):

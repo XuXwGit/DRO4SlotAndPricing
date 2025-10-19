@@ -9,6 +9,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 print(PROJECT_ROOT)
 sys.path.insert(0, PROJECT_ROOT)
 
+from src.models.dm.determine_model import DeterministicModel
 from src.models.dro.ldr.SOCP4LDR_GRB import SOCP4LDR
 from src.models.dro.ldr.SOCP4LDR_Mosek import SOCP4LDR_Mosek
 from src.models.dro.ldr.LDR_model_checker import run_all_validations
@@ -20,14 +21,15 @@ from src.utils.model_params import construct_model_params, generate_feasible_tes
 if __name__ == "__main__":
     try:
         # 从文件中读取算例数据
+        logging.debug(f"读取案例数据: ")
         data = DataManager()
-        reader = DataReader(input_data=data, time_horizon=30)
+        reader = DataReader(input_data=data, time_horizon=15)
         reader.read()
         data.generate_demand_and_price()
         model_params = construct_model_params(data_manager=data)
     except Exception as e:
-        logging.debug(f"读取案例数据 or 生成模型参数 失败: {e}")
         # 兜底：生成一个测试用例
+        logging.debug(f"读取案例数据 or 生成模型参数 失败: {e}")
         model_params = generate_feasible_test_case(
             num_paths=10,
             num_periods=10,
@@ -36,21 +38,26 @@ if __name__ == "__main__":
             seed=42  # 固定种子以复现结果
         )
 
-    model_params = generate_feasible_test_case(
-            num_paths=1,
-            num_periods=2,
-            num_prices=1,
-            uncertainty_dim=1,
-            uncertainty_std_ratio=0,
-            seed=42  # 固定种子以复现结果
-        )
+    # model_params = generate_feasible_test_case(
+    #         num_paths=1,
+    #         num_periods=2,
+    #         num_prices=1,
+    #         uncertainty_dim=1,
+    #         uncertainty_std_ratio=0,
+    #         seed=42  # 固定种子以复现结果
+    #     )
 
+    print("\n--- 求解 LP Relaxation 版本 ---")
+    det_model_lp = DeterministicModel(model_params, use_lp_relaxation=True)
+    det_model_lp.build_model()
+    det_model_lp.solve()
+    det_model_lp.write()
+    print(det_model_lp.solutions)
+
+    print("\n--- 求解 DRO 版本 ---")
     # socp = SOCP4LDR(model_params=model_params)
     socp = SOCP4LDR_Mosek(model_params=model_params)
-
     socp.build_model()
-
-    # 求解
     socp.solve()
     print(socp.get_status())
 
