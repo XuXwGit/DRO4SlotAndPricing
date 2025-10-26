@@ -137,7 +137,9 @@ class Config:
     # 默认不确定度 
     DEFAULT_UNCERTAIN_DEGREE = 0.15         
     # 惩罚系数 
-    PENALTY_COEFFICIENT = 1.0               
+    PENALTY_COEFFICIENT = 1.0
+    # 长协定价系数
+    LONG_HAUL_COEFFICIENT = 0.5
     # 初始空箱数量 
     INITIAL_EMPTY_CONTAINERS = 28           
     # 鲁棒性 
@@ -155,7 +157,7 @@ class Config:
     # 是否打印文件日志 
     WHETHER_PRINT_FILE_LOG = False          
     # 是否打印数据状态 
-    WHETHER_PRINT_DATA_STATUS = False       
+    WHETHER_PRINT_DATA_STATUS = True       
     # 是否打印船舶决策 
     WHETHER_PRINT_VESSEL_DECISION = False   
     # 是否打印请求决策 

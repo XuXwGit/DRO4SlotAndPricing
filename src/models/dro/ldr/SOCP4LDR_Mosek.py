@@ -11,9 +11,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(o
 print(PROJECT_ROOT)
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.models.model_builder import ModelBuilder, timeit_if_debug
+from src.models.SOCP_model_builder import SOCPModelBuilder
+from src.models.model_builder import timeit_if_debug
 
-class SOCP4LDR_Mosek(ModelBuilder):
+class SOCP4LDR_Mosek(SOCPModelBuilder):
     """
     使用 MOSEK Optimizer API (Task) 建模二阶段分布鲁棒优化 (SOCP-based LDR)
     -------------------------------------------------------
@@ -109,17 +110,19 @@ class SOCP4LDR_Mosek(ModelBuilder):
         self._set_variable_bounds()
 
     def _set_variable_bounds(self):
+        self.INF = 1.0e30  # 一个足够大的数
     # 设置所有变量为自由变量（lb=-inf, ub=+inf）
         for i in range(self.num_vars):
             self.model.putvarbound(i, mosek.boundkey.fr, -0.0, +0.0)
         # (26): t_k <= 0, l <= 0
+
         for k in range(self.I1):
-            self.model.putvarbound(self.t_idx[k], mosek.boundkey.up, -0.0, 0.0)
-        self.model.putvarbound(self.l_idx, mosek.boundkey.up, -0.0, 0.0)
-        # (27): X[phi] >= 0, Y[phi] >= 0
+            self.model.putvarbound(self.t_idx[k], mosek.boundkey.up, -self.INF, 0.0)
+        self.model.putvarbound(self.l_idx, mosek.boundkey.up, -self.INF, 0.0)
+
         for phi in self.phi_list:
-            self.model.putvarbound(self.X_idx[phi], mosek.boundkey.lo, 0.0, +0.0)
-            self.model.putvarbound(self.Y_idx[phi], mosek.boundkey.lo, 0.0, +0.0)
+            self.model.putvarbound(self.X_idx[phi], mosek.boundkey.lo, 0.0, self.INF)
+            self.model.putvarbound(self.Y_idx[phi], mosek.boundkey.lo, 0.0, self.INF)
 
     @timeit_if_debug
     def set_objective(self):
@@ -222,6 +225,12 @@ class SOCP4LDR_Mosek(ModelBuilder):
                     self.add_R_z_eq_0(phi, t)
                     # R^u = 0
                     self.add_R_u_eq_0(phi, t)
+                elif t == 0:
+                    self.add2_delta0_eq_0(phi, t)
+                    # R^z = 0
+                    self.add_R_z_eq_0(phi, t)
+                    # R^u = 0
+                    self.add_R_u_eq_0(phi, t)
 
     def add_delta0_eq_0(self, phi, t):
         """约束 (14)"""
@@ -242,6 +251,24 @@ class SOCP4LDR_Mosek(ModelBuilder):
         con_idx = self.model.getnumcon() - 1
         self.model.putarow(con_idx, vars_, coeffs)
         self.model.putconbound(con_idx, mosek.boundkey.fx, -constant, -constant)
+
+    def add2_delta0_eq_0(self, phi, t):
+        """
+        约束: R0_{phi,t} == Y_phi
+        若没有 Y_t（按时间索引），则回退为 R0_{phi,t} == Y_phi
+        """
+
+        if not hasattr(self, "Y_idx") or (phi not in self.Y_idx):
+            raise KeyError(f"Y_idx[phi] 不存在：phi={phi}")
+        vars_ = [self.R0_idx[(phi, t)], self.Y_idx[phi]]
+        coeffs = [1.0, -1.0]
+
+        self.model.appendcons(1)
+        con_idx = self.model.getnumcon() - 1
+        self.model.putarow(con_idx, vars_, coeffs)
+        self.model.putconbound(con_idx, mosek.boundkey.fx, 0.0, 0.0)
+
+
 
     def add_delta_z_eq_0(self, phi, t):
                     for i in range(self.I1):
@@ -312,10 +339,10 @@ class SOCP4LDR_Mosek(ModelBuilder):
         # (25): SOC constraints — I1+1 个 3D 锥
         for i in range(self.I1):
             # || [pi[3i+1], pi[3i+2]] ||_2 <= pi[3i]
-            self.add_soc_constraint(self.pi_idx[q][3*i], [self.pi_idx[q][3*i+1], self.pi_idx[q][3*i+2]])
+            self.add_soc_constraint(self.pi_idx[q][3*i + 2], [self.pi_idx[q][3*i], self.pi_idx[q][3*i+1]])
 
         # 聚合锥
-        self.add_soc_constraint(self.pi_idx[q][3*self.I1], [self.pi_idx[q][3*self.I1+1], self.pi_idx[q][3*self.I1+2]])
+        self.add_soc_constraint(self.pi_idx[q][3*self.I1 + 2], [self.pi_idx[q][3*self.I1], self.pi_idx[q][3*self.I1+1]])
 
     def add_soc_constraint(self, t_var_idx, y_var_indices):
         """
@@ -351,7 +378,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
         self.model.appendacc(quad_dom, afe_list, None)
 
 
-        # 辅助函数  将表达式 e 合并到 base_vars/base_coeffs 中，带符号
+    # 辅助函数  将表达式 e 合并到 base_vars/base_coeffs 中，带符号
     def _merge_expr(self, base_vars, base_coeffs, expr, sign=1.0):
             """返回 (all_vars, all_coeffs, total_const) for: base + sign * e"""
             vars_ = list(base_vars)
@@ -537,8 +564,7 @@ class SOCP4LDR_Mosek(ModelBuilder):
         vars_, coeffs_, const = self._merge_expr(base_vars, base_coeffs, alpha0, sign=1.0)
         self._add_le_constraint(vars_, coeffs_, -const)
 
-
-    def solve(self, time_limit: float = 300.0, rel_gap: float = 1e-8, verbose: bool = True):
+    def solve(self, time_limit: float = 3000.0, rel_gap: float = 1e-8, verbose: bool = True):
         # 设置求解参数
         self.model.putdouparam(mosek.dparam.intpnt_co_tol_rel_gap, rel_gap)
         self.model.putdouparam(mosek.dparam.optimizer_max_time, time_limit)
@@ -547,11 +573,11 @@ class SOCP4LDR_Mosek(ModelBuilder):
 
         # （可选）收紧基解的可行性容差
         # 原始可行性容差
-        self.model.putdouparam(mosek.dparam.intpnt_tol_pfeas, 1e-10)
+        self.model.putdouparam(mosek.dparam.intpnt_tol_pfeas, 1e-6)
         # 对偶可行性容差
-        self.model.putdouparam(mosek.dparam.intpnt_tol_dfeas, 1e-10)
+        self.model.putdouparam(mosek.dparam.intpnt_tol_dfeas, 1e-6)
         # 相对对偶间隙容差（关键！）
-        self.model.putdouparam(mosek.dparam.intpnt_tol_rel_gap, 1e-10)
+        self.model.putdouparam(mosek.dparam.intpnt_tol_rel_gap, 1e-6)
 
         if verbose:
             # 启用日志输出到终端

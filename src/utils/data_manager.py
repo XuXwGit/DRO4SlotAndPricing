@@ -169,7 +169,7 @@ class DataManager:
 
                 demand_maximum_value = demand_value * self.uncertain_degree
 
-                request.long_haul_price = price
+                request.long_haul_price = price * Config.LONG_HAUL_COEFFICIENT
                 request.penalty_cost = price * Config.PENALTY_COEFFICIENT
                 request.mean_demand = demand_value
                 request.base_demand = demand_value

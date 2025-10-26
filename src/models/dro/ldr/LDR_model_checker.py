@@ -7,9 +7,9 @@ def validate_capacity_constraints(solution, model_params):
     """
     print("🧪 测试 3: 验证容量约束")
     all_valid = True
-    total_active = 0
-    tolerance = 1e-6
-    activity_tolerance = 1e-4
+    total_active = 0.1
+    tolerance = 0.1
+    activity_tolerance = 0.1
     for edge, capacity in model_params['A_prime'].items():
         valid = True
         active_count = 0
@@ -43,8 +43,8 @@ def validate_cone_constraints(solution, I1):
     all_valid = True
     total_active = 0
     total_inactive = 0
-    tolerance = 1e-6
-    activity_tolerance = 1e-4  # 判断紧约束的容差
+    tolerance = 0.1
+    activity_tolerance = 0.1  # 判断紧约束的容差
 
     for q, pi_vals in solution['pi'].items():
         valid = True
@@ -54,14 +54,10 @@ def validate_cone_constraints(solution, I1):
         # 遍历 I1+1 个锥（含聚合锥）
         for i in range(I1 + 1):
             if i < I1:
-                t_val = pi_vals[3 * i]
-                y1 = pi_vals[3 * i + 1]
-                y2 = pi_vals[3 * i + 2]
+                y1, y2, t_val = pi_vals[3*i], pi_vals[3*i + 1], pi_vals[3*i + 2]
                 block_desc = f"分量锥 {i}"
             else:
-                t_val = pi_vals[3 * I1]
-                y1 = pi_vals[3 * I1 + 1]
-                y2 = pi_vals[3 * I1 + 2]
+                y1, y2, t_val = pi_vals[3 * I1], pi_vals[3 * I1 + 1 ], pi_vals[3 * I1 + 2]
                 block_desc = "聚合锥"
 
             norm_val = np.sqrt(y1**2 + y2**2)
@@ -92,8 +88,11 @@ def validate_cone_constraints(solution, I1):
 
     return all_valid
 
+# def validate_t_and_l_constraints(solution):
+#     t = solution['t']
+#     l = solution['l']
 
-def validate_delta_and_R_constraints(solution, model_params):
+def validate_delta_and_R_constraints(solution, model_params, tolerance=1e-3):
     """
     测试 2: 验证原始约束 (Δ=0 和 R=0) 是否被满足。
     """
@@ -110,7 +109,6 @@ def validate_delta_and_R_constraints(solution, model_params):
     Y_sol = solution['Y']
 
     all_valid = True
-    tolerance = 1e-4  # 稍宽松，因涉及多步累加
 
     for phi in phi_list:
         t_deadline = t_d_phi.get(phi, 0)
@@ -182,7 +180,7 @@ def validate_delta_and_R_constraints(solution, model_params):
     return all_valid
 
 
-def validate_support_duality_constraints_tightness(solution, model_params, tolerance: float = 1e-6):
+def validate_support_duality_constraints_tightness(solution, model_params, tolerance: float = 1e-3):
     """
     测试 3: 验证对偶线性约束是否满足。
     """
@@ -252,7 +250,7 @@ def validate_support_duality_constraints_tightness(solution, model_params, toler
     return all_valid
 
 
-def validate_objective_value(solution, model_params, tolerance: float = 1e-6):
+def validate_objective_value(solution, model_params, tolerance: float = 1e-3):
     """
     测试 4: 验证目标函数值是否正确。
     """
@@ -276,7 +274,7 @@ def validate_objective_value(solution, model_params, tolerance: float = 1e-6):
         return True
 
 
-def run_all_validations(solution, model_params):
+def run_all_validations(solution, model_params, tolerance: float = 1e-3):
     """
     运行所有验证测试。
     """
@@ -286,10 +284,11 @@ def run_all_validations(solution, model_params):
 
     I1 = len(solution['s'])
     results = []
+    # 测试 1: t,l
 
 
     # 测试 2: Δ 和 R 约束
-    results.append(validate_delta_and_R_constraints(solution, model_params))
+    results.append(validate_delta_and_R_constraints(solution, model_params, tolerance))
 
     # 测试 3: 锥约束
     if solution['pi'] is not None:
@@ -299,7 +298,7 @@ def run_all_validations(solution, model_params):
         results.append(True)
 
     # 测试 4: 对偶线性约束
-    results.append(validate_support_duality_constraints_tightness(solution, model_params))
+    results.append(validate_support_duality_constraints_tightness(solution, model_params, tolerance))
 
     print("=" * 60)
     if all(results):

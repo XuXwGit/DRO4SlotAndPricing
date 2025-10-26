@@ -5,14 +5,17 @@ import os
 import sys
 import gurobipy as gp
 from gurobipy import GRB
+import logging
+
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 print(PROJECT_ROOT)
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.models.model_builder import MAXIMIZE, OPTIMAL, ModelBuilder, VType, timeit_if_debug
+from src.models.SOCP_model_builder import SOCPModelBuilder
+from src.models.model_builder import MAXIMIZE, OPTIMAL, VType, timeit_if_debug
 
-class SOCP4LDR(ModelBuilder):
+class SOCP4LDR_GRB(SOCPModelBuilder):
     """
     使用 Gurobi 建模二阶段分布鲁棒优化 (SOCP-based LDR)
     -------------------------------------------------------
@@ -215,6 +218,12 @@ class SOCP4LDR(ModelBuilder):
                         self.model.addConstr(self.Rz[(phi, t, i)] == 0.0, name=f"Rz_zero_{phi}_{t}_{i}")
                     for k in range(self.I1):
                         self.model.addConstr(self.Ru[(phi, t, k)] == 0.0, name=f"Ru_zero_{phi}_{t}_{k}")
+                elif t == 0:
+                    self.model.addConstr(self.R0[(phi, t)] == self.Y[phi], name=f"R0_zero_{phi}_{t}")
+                    for i in range(self.I1):
+                        self.model.addConstr(self.Rz[(phi, t, i)] == 0.0, name=f"Rz_zero_{phi}_{t}_{i}")
+                    for k in range(self.I1):
+                        self.model.addConstr(self.Ru[(phi, t, k)] == 0.0, name=f"Ru_zero_{phi}_{t}_{k}")
                 else:
                     print(f"  -> No constraints added for ({phi}, {t})")
                     pass
@@ -284,12 +293,12 @@ class SOCP4LDR(ModelBuilder):
                               - self.R0[(phi, t)]
                               + self.a * self.p_hat.get(phi, 0.0))
             # α_z^{svc}_i = d^{(z)}_{φt,i} - a Σ_p p Gz_{φtp,i} - Rz_{φt,i}
-            self.alpha_z[q] = [(self.d_z_phi_t_i.get((phi, t, i), 0.0)
+            self.alpha_z[q] = [self.d_z_phi_t_i.get((phi, t, i), 0.0)
                                          - self.a * gp.quicksum(p * self.Gz[(phi, t, p, i)] for p in self.p_list)
-                                         - self.Rz[(phi, t, i)]) for i in range(self.I1)]
+                                         - self.Rz[(phi, t, i)] for i in range(self.I1)]
             # α_u^{svc}_k = - a Σ_p p Gu_{φtp,k} - Ru_{φt,k}
-            self.alpha_u[q] = [(- self.a * gp.quicksum(p * self.Gu[(phi, t, p, k)] for p in self.p_list)
-                                         - self.Ru[(phi, t, k)]) for k in range(self.I1)]
+            self.alpha_u[q] = [- self.a * gp.quicksum(p * self.Gu[(phi, t, p, k)] for p in self.p_list)
+                                         - self.Ru[(phi, t, k)] for k in range(self.I1)]
             # γ_svc = 0
             self.gamma[q] = gp.LinExpr(0.0)
 
@@ -298,16 +307,16 @@ class SOCP4LDR(ModelBuilder):
             phi, t = q[1], q[2]
             # α0_mix = Σ_p G0_{φtp} - 1
             self.alpha0[q] = gp.quicksum(self.G0[(phi, t, p)] for p in self.p_list) - 1.0
-            self.alpha_z[q] = [gp.quicksum(self.Gz[(phi, t, p, i)] for p in self.p_list) for i in range(self.I1)]
-            self.alpha_u[q] = [gp.quicksum(self.Gu[(phi, t, p, k)] for p in self.p_list) for k in range(self.I1)]
+            self.alpha_z[q] = [self.Gz[(phi, t, p, i)] for p in self.p_list for i in range(self.I1)]
+            self.alpha_u[q] = [self.Gu[(phi, t, p, k)] for p in self.p_list for k in range(self.I1)]
             self.gamma[q] = gp.LinExpr(0.0)
 
         # ng case (G nonneg)
         elif isinstance(q, tuple) and q[0] == 'ng':
             phi, t, p = q[1], q[2], q[3]
             self.alpha0[q] = - self.G0[(phi, t, p)]
-            self.alpha_z[q] = [- self.Gz[(phi, t, p, i)] for i in range(self.I1)]
-            self.alpha_u[q] = [- self.Gu[(phi, t, p, k)] for k in range(self.I1)]
+            self.alpha_z[q] = [- self.Gz[(phi, t, p, i)] for i in range(self.I1) for i in range(self.I1)]
+            self.alpha_u[q] = [- self.Gu[(phi, t, p, k)] for k in range(self.I1) ]
             self.gamma[q] = gp.LinExpr(0.0)
 
         # nr case (R nonneg)
@@ -374,13 +383,13 @@ class SOCP4LDR(ModelBuilder):
         # 6) π_q ⪰_K 0 : I1+1个三维二阶锥，对 (3i, 3i+1, 3i+2) ⪰Q^3 0
         #    每一对规范为: || [π_q[3i], π_q[3i+1]] ||_2 ≤ π_q[3i+2], 且 π_q[3i+2] ≥ 0
         for i in range(self.I1):
-            norm_var = [self.pi[q][3 * i+1], self.pi[q][3 * i +2]]
+            norm_var = [self.pi[q][3 * i + 1], self.pi[q][3 * i + 2]]
             rhs_var = self.pi[q][3 * i]
             # 锥约束: ||[π[3i], π[3i+1]]||_2 <= π[3i+2]
-            self.add_soc_constraint(t_var=rhs_var,y_vars=norm_var, name=f"qconstr_norm_q{q}_pair{i}".replace(" ", "_"))
+            self.add_soc_constraint(t_var=rhs_var, y_vars=norm_var, name=f"qconstr_norm_q{q}_pair{i}".replace(" ", "_"))
 
         # 聚合项的锥约束: || [π_q[3I1], π_q[3I1+1]] ||_2 ≤ π_q[3I1+2]
-        agg_norm_var = [self.pi[q][3 * self.I1+1], self.pi[q][3 * self.I1 + 2]]
+        agg_norm_var = [self.pi[q][3 * self.I1 + 1], self.pi[q][3 * self.I1 + 2]]
         agg_rhs_var = self.pi[q][3 * self.I1]
         self.add_soc_constraint(t_var=agg_rhs_var, y_vars=agg_norm_var, name=f"qconstr_norm_q{q}_agg".replace(" ", "_"))
 
@@ -403,15 +412,15 @@ class SOCP4LDR(ModelBuilder):
             # 添加二阶锥约束: ||y||_2 <= t
             # 锥约束: ||[π[3i], π[3i+1]]||_2 <= π[3i+2]
             self.model.addQConstr(gp.quicksum(v * v for v in y_vars) <= t_var * t_var, name=name)
-
+            self.model.addConstr(t_var >= 0.0, name=f"{name}__t_nonneg")
     # ---------------- Solve & extract ----------------
     @timeit_if_debug
     def solve(self, verbose=True):
         """
         优化并输出结果。
         """
-        self.model.Params.MIPGap = 0.01  # 1% 的 Gap
-        self.model.Params.TimeLimit = 300  # 60 秒的时间限制
+        self.model.Params.MIPGap = 0.00  # 1% 的 Gap
+        self.model.Params.TimeLimit = 3600  # 60 秒的时间限制
 
         self.model.optimize()
 

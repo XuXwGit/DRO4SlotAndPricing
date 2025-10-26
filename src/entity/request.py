@@ -52,7 +52,7 @@ class Request:
         
         # 成本属性
         self.penalty_cost = 0.0
-        self.long_haul_price = 100
+        self.long_haul_price = 100.0
         
         # 港口对象
         self.origin = None  
