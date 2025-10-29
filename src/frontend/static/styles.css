@@ -1,0 +1,27 @@
+body {
+    background-color: #f7f9fb;
+}
+
+h1, h2, h3, h4 {
+    color: #19364a;
+}
+
+form {
+    background-color: #ffffff;
+    padding: 1.5rem;
+    border-radius: 0.5rem;
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.05);
+}
+
+.solution-block {
+    background-color: #fff;
+    border: 1px solid #e3e9ef;
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.solution-block ul {
+    margin-bottom: 0;
+    padding-left: 1.2rem;
+}
