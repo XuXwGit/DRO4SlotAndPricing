@@ -8,11 +8,12 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(o
 print(PROJECT_ROOT)
 sys.path.insert(0, PROJECT_ROOT)
 
-from src.models.model_builder import OPTIMAL, ModelBuilder, VType, timeit_if_debug
+from src.models.SOCP_model_builder import SOCPModelBuilder
+from src.models.model_builder import OPTIMAL, VType, timeit_if_debug
 from src.utils.model_params import generate_feasible_test_case
 
 
-class DeterministicModel(ModelBuilder):
+class DeterministicModel(SOCPModelBuilder):
     """
     确定性仓位分配与定价问题模型 (Deterministic Slot Allocation and Pricing Problem)
 
@@ -89,7 +90,7 @@ class DeterministicModel(ModelBuilder):
         self.add_service_constr()
 
         # 4. 混合约束 (公式 5)
-        self.add_mixing_constr()
+        # self.add_mixing_constr()
 
     @timeit_if_debug
     def add_inventory_constr(self):
@@ -98,6 +99,11 @@ class DeterministicModel(ModelBuilder):
         """
         for phi in self.phi_list:
             for t in self.t_list:
+                if t==0:
+                    self.model.addConstr(
+                        self.R[(phi, t)] == self.Y[phi],
+                        name=f"inventory_{phi}_{t}"
+                    )
                 if 1 <= t <= self.t_d_phi.get(phi, 0):
                     # Rϕt = Yϕ - Σ_{t'=0}^{t-1} [dϕt' - a(Σp p Gϕt'p - p̂_ϕ)]
                     demand_expr = gp.quicksum(
@@ -118,7 +124,7 @@ class DeterministicModel(ModelBuilder):
 
     @timeit_if_debug
     def add_service_constr(self):
-        # 3. 服务水平约束 (公式 4)
+        # 3. 需求约束 (公式 4)
         for phi in self.phi_list:
             for t in self.t_list:
                 demand = self.d_0_phi_t.get((phi, t), 0.0)
@@ -128,7 +134,7 @@ class DeterministicModel(ModelBuilder):
 
     @timeit_if_debug
     def add_mixing_constr(self):
-        # 4. 混合约束 (公式 5)
+        # 4. 概率约束 (公式 5)
         for phi in self.phi_list:
             for t in self.t_list:
                 self.model.addConstr(
@@ -211,13 +217,15 @@ def main():
 
     # 1. 创建测试参数
     model_params = generate_feasible_test_case(
-            num_paths=1,
-            num_periods=2,
-            num_prices=1,
-            uncertainty_dim=1,
-            uncertainty_std_ratio=0,
-            seed=42  # 固定种子以复现结果
-        )
+                num_paths=12,
+                num_periods=10,
+                num_prices=10,
+                base_mean_demand =80,
+                demand_sensitivity=0.5,
+                uncertainty_dim=6,
+                uncertainty_std_ratio=0.5,
+                seed=42  # 固定种子以复现结果
+            )
     print("✅ 测试参数已创建。")
 
     # 2. 构建并求解确定性松弛模型 (LP Relaxation)

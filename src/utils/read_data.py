@@ -43,7 +43,7 @@ class DataReader:
                  input_data: DataManager,
                  time_horizon: int,
                  use_db: bool = False,
-                 local_path: str = Config.ROOT_PATH + "/" + Config.DATA_PATH  + Config.CASE_PATH,
+                 local_path: str = Config.ROOT_PATH + "/" + Config.DATA_PATH,
                  db_path: str = ""):
         """
         初始化数据读取器
@@ -62,10 +62,13 @@ class DataReader:
         self.db_path = db_path
 
 
-    def read(self):
+    def read(self, case: str = "1"):
         """
         数据读取的主框架，按顺序读取所有必要的数据
         """
+        if case != "":
+            self.file_path = self.file_path + case + "/"
+
         logger.info("========Start to read data========")
         start_time = time.time()
 
