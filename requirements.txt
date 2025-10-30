@@ -1,0 +1,4 @@
+Flask>=2.3,<3.0
+numpy>=1.23
+pandas>=1.5
+gurobipy>=10.0
