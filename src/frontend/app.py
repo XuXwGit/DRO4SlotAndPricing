@@ -1,17 +1,78 @@
 """Flask application exposing an interactive dashboard for model execution."""
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+import logging
+from collections import deque
+from datetime import datetime
+from threading import Lock
 from types import SimpleNamespace
+from typing import Dict, List, Optional, Tuple
 
-from flask import Flask, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 
 from src.frontend.model_runner import ModelRunRequest, ModelRunResult, run_model
+
+
+LOG = logging.getLogger(__name__)
+
+
+class LiveLogBuffer(logging.Handler):
+    """In-memory log handler that stores recent records for streaming to the UI."""
+
+    def __init__(self, capacity: int = 500) -> None:
+        super().__init__(level=logging.INFO)
+        self._entries: deque[Dict[str, object]] = deque(maxlen=capacity)
+        self._lock = Lock()
+        self._sequence = 0
+
+    def emit(self, record: logging.LogRecord) -> None:  # pragma: no cover - logging side effect
+        message = record.getMessage()
+        timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+        payload = {
+            "seq": None,
+            "time": timestamp,
+            "level": record.levelname,
+            "logger": record.name,
+            "message": message,
+        }
+        with self._lock:
+            self._sequence += 1
+            payload["seq"] = self._sequence
+            self._entries.append(payload)
+
+    def get_entries(self, since: int = 0) -> Tuple[List[Dict[str, object]], int]:
+        """Return log entries newer than ``since`` and the latest sequence id."""
+
+        with self._lock:
+            entries = [entry.copy() for entry in self._entries if (entry["seq"] or 0) > since]
+            latest = self._sequence
+        return entries, latest
+
+    def clear(self) -> None:
+        """Remove buffered entries and reset the sequence counter."""
+
+        with self._lock:
+            self._entries.clear()
+            self._sequence = 0
+
+
+LOG_STREAM_HANDLER = LiveLogBuffer(capacity=800)
+
+
+def _ensure_logging_hook() -> None:
+    """Attach the in-memory handler to the root logger exactly once."""
+
+    root_logger = logging.getLogger()
+    if not any(isinstance(handler, LiveLogBuffer) for handler in root_logger.handlers):
+        root_logger.addHandler(LOG_STREAM_HANDLER)
+    if root_logger.level > logging.INFO:
+        root_logger.setLevel(logging.INFO)
 
 
 def create_app() -> Flask:
     """Application factory used by the WSGI server entry point."""
 
+    _ensure_logging_hook()
     app = Flask(__name__)
 
     @app.route("/", methods=["GET", "POST"])
@@ -24,9 +85,16 @@ def create_app() -> Flask:
 
         if request.method == "POST":
             form_values.update(request.form.to_dict())
+            form_values["use_lp_relaxation"] = "on" if request.form.get("use_lp_relaxation") else "off"
             run_request, parse_errors = _parse_request(form_values)
             errors.extend(parse_errors)
             if run_request and not errors:
+                LOG_STREAM_HANDLER.clear()
+                LOG.info(
+                    "收到模型运行请求: model_type=%s, data_source=%s",  # noqa: G004 - non-English message
+                    run_request.model_type,
+                    run_request.data_source,
+                )
                 result = run_model(run_request)
                 if not result.success:
                     errors.append(result.message)
@@ -43,6 +111,17 @@ def create_app() -> Flask:
             model_types=_model_type_options(),
             data_sources=_data_source_options(),
         )
+
+    @app.route("/logs", methods=["GET"])
+    def stream_logs() -> Response:
+        """Return buffered log messages to the front-end for incremental polling."""
+
+        try:
+            since = int(request.args.get("since", "0"))
+        except ValueError:
+            since = 0
+        entries, latest = LOG_STREAM_HANDLER.get_entries(since)
+        return jsonify({"entries": entries, "latest": latest})
 
     return app
 

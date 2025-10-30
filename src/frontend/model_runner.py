@@ -71,10 +71,16 @@ SUPPORTED_MODELS = {
 def run_model(request: ModelRunRequest) -> ModelRunResult:
     """Generate parameters, execute the chosen model and summarise the output."""
 
+    logger.info(
+        "开始运行模型: 类型=%s, 数据来源=%s",  # noqa: G004 - log message intentionally in Chinese
+        request.model_type,
+        request.data_source,
+    )
     try:
         model_params = _build_model_params(request)
         metrics = _summarise_parameters(model_params)
     except ModelRunError as exc:
+        logger.error("模型参数构造失败: %s", exc)
         return ModelRunResult(
             success=False,
             model_type=request.model_type,
@@ -83,12 +89,25 @@ def run_model(request: ModelRunRequest) -> ModelRunResult:
 
     try:
         result = _execute_model(request, model_params)
+        if result.success:
+            logger.info(
+                "模型求解成功: 状态=%s, 目标值=%s",  # noqa: G004 - log message intentionally in Chinese
+                result.metrics.get("status"),
+                result.objective,
+            )
+        else:
+            logger.warning(
+                "模型求解未成功: 状态=%s, 信息=%s",  # noqa: G004 - log message intentionally in Chinese
+                result.metrics.get("status"),
+                result.message,
+            )
         if not result.success:
             result.metrics.update(metrics)
         else:
             result.metrics = {**metrics, **result.metrics}
         return result
     except ModelRunError as exc:
+        logger.error("模型求解过程中出现错误: %s", exc)
         return ModelRunResult(
             success=False,
             model_type=request.model_type,
